@@ -1,1 +1,2 @@
-Netlify-Projekt. In Netlify die Umgebungsvariable ADMIN_PASSWORD für Functions setzen.
+# Farbatlas V09
+Neuer Store, sichtbare Statusmeldungen, bereinigte Speicherlogik.
