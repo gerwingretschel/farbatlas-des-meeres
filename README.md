@@ -1,0 +1,1 @@
+Netlify-Projekt. In Netlify die Umgebungsvariable ADMIN_PASSWORD für Functions setzen.
