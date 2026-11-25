@@ -5,6 +5,7 @@ let html = fs.readFileSync(path, 'utf8');
 const scripts = [
   '<script src="/v10-client.js"></script>',
   '<script src="/course-leader-client.js"></script>',
+  '<script src="/image-compression-client.js"></script>',
 ];
 
 for (const script of scripts) {

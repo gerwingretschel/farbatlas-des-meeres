@@ -1,0 +1,41 @@
+FARBATLAS – VERIFIKATION ADMIN-BILDKOMPRIMIERUNG
+Stand: 2026-11-25
+
+ERGEBNIS: BESTANDEN
+
+1. Syntaxprüfung
+- image-compression-client.js: OK
+- netlify/functions/farbatlas.mjs: OK
+- netlify/functions/lib/image-compression-utils.mjs: OK
+- bestehende v10-client.js und course-leader-client.js: OK
+
+2. Unit-Tests
+- Gesamt: 14
+- Bestanden: 14
+- Fehlgeschlagen: 0
+
+Geprüft wurden unter anderem:
+- Zielgrenzen 400 KB / 1.600 Pixel / JPEG
+- sichere Lauf- und Sicherungsschlüssel
+- Ablehnung von Dateien über 400 KB
+- Ablehnung falscher Ausgabeformate
+- Schutz vor Bildvergrößerung
+- keine erneute Komprimierung bereits regelkonformer Bilder
+- Zustände Komprimiert / Gesichert / Wiederhergestellt / Konflikt
+- SHA-256-Prüfsummen für Konfliktschutz
+
+3. Build
+- npm run build: OK
+- image-compression-client.js wird genau einmal eingebunden
+- vorhandene v10- und Kursleiter-Skripte bleiben genau einmal eingebunden
+
+4. Server-Rundlauf mit In-Memory-Netlify-Blob-Test
+- Testbild vorher: 800.000 Byte
+- komprimierte Fassung: 350.000 Byte
+- Sicherung vor Austausch: OK
+- gleicher Bildschlüssel: OK
+- vollständige Wiederherstellung: OK
+- wiederhergestelltes Bild bytegenau identisch: OK
+
+Hinweis zur Testumgebung:
+Der externe Paketdownload über den Microsoft-NPM-Proxy war mit HTTP 403 gesperrt. Die Projektabhängigkeiten wurden für die Prüfungen nicht geändert; Syntaxprüfung, Unit-Tests, Build und der Server-Rundlauf wurden vollständig offline ausgeführt. Im vorhandenen Projekt bzw. bei Netlify wird die bereits bestehende Abhängigkeit @netlify/blobs wie bisher verwendet.
