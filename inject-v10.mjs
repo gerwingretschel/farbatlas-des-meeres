@@ -1,5 +1,13 @@
 import fs from 'node:fs';
-const p='index.html';let s=fs.readFileSync(p,'utf8');
-const tag='<script src="/v10-client.js"></script>';
-if(!s.includes(tag))s=s.replace('</body>',tag+'</body>');
-fs.writeFileSync(p,s);
+
+const path = 'index.html';
+let html = fs.readFileSync(path, 'utf8');
+const scripts = [
+  '<script src="/v10-client.js"></script>',
+  '<script src="/course-leader-client.js"></script>',
+];
+
+for (const script of scripts) {
+  if (!html.includes(script)) html = html.replace('</body>', script + '</body>');
+}
+fs.writeFileSync(path, html);
