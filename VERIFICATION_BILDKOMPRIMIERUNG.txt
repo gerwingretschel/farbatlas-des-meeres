@@ -10,8 +10,8 @@ ERGEBNIS: BESTANDEN
 - bestehende v10-client.js und course-leader-client.js: OK
 
 2. Unit-Tests
-- Gesamt: 14
-- Bestanden: 14
+- Gesamt: 17
+- Bestanden: 17
 - Fehlgeschlagen: 0
 
 Geprüft wurden unter anderem:

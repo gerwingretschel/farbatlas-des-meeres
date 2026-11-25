@@ -15,11 +15,35 @@
     return `${(value / 1024 / 1024).toFixed(1)} MB`;
   };
 
+  function activeAdminToken() {
+    const stored = sessionStorage.getItem('farbatlasAdminTokenV09') || '';
+    if (stored) return stored;
+    return typeof adminToken === 'undefined' ? '' : String(adminToken || '');
+  }
+
+  function runtimeDataset() {
+    let bridged = null;
+    try { bridged = window.FarbatlasRuntime?.getDataset?.() || null; } catch { bridged = null; }
+    const globalName = typeof currentDatasetName === 'undefined' ? '' : String(currentDatasetName || '').trim();
+    const bridgedName = String(bridged?.name || '').trim();
+    const inputName = String(el('#openDatasetName')?.value || el('#saveDatasetName')?.value || '').trim();
+    const globalImages = typeof imported === 'undefined' || !Array.isArray(imported) ? [] : imported;
+    const bridgedImages = Array.isArray(bridged?.images) ? bridged.images : [];
+    const images = (globalImages.length ? globalImages : bridgedImages).filter((item) => item && item.src);
+    const globalLoaded = typeof datasetLoaded !== 'undefined' && Boolean(datasetLoaded);
+    return {
+      name: globalName || bridgedName || inputName,
+      images,
+      loaded: Boolean(globalLoaded || bridged?.loaded || ((globalName || bridgedName) && images.length)),
+    };
+  }
+
   function api(action, data = {}) {
-    if (typeof adminToken === 'undefined' || !adminToken) return Promise.reject(new Error('Administrator-Anmeldung erforderlich.'));
+    const token = activeAdminToken();
+    if (!token) return Promise.reject(new Error('Administrator-Anmeldung erforderlich.'));
     return fetch('/api/farbatlas', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify({ action, ...data })
     }).then(async (response) => {
       const text = await response.text();
@@ -31,11 +55,11 @@
   }
 
   function currentName() {
-    return typeof currentDatasetName === 'undefined' ? '' : String(currentDatasetName || '').trim();
+    return runtimeDataset().name;
   }
 
   function currentImages() {
-    return typeof imported === 'undefined' || !Array.isArray(imported) ? [] : imported.filter((item) => item && item.src);
+    return runtimeDataset().images;
   }
 
   function setStatus(message, type = '') {
@@ -210,9 +234,9 @@
 
   async function analyze() {
     if (state.busy) return;
-    const name = currentName();
-    const images = currentImages();
-    if (!name || typeof datasetLoaded === 'undefined' || !datasetLoaded) {
+    const context = runtimeDataset();
+    const { name, images } = context;
+    if (!name || !context.loaded) {
       setStatus('Bitte zuerst den gewünschten Datensatz öffnen.', 'error');
       return;
     }
@@ -344,10 +368,11 @@
   }
 
   async function loadRuns() {
-    const name = currentName();
+    const context = runtimeDataset();
+    const name = context.name;
     const box = el('#imageCompressionRuns');
     if (!box) return;
-    if (!name || typeof adminToken === 'undefined' || !adminToken) {
+    if (!name || !context.loaded || !activeAdminToken()) {
       box.innerHTML = '<p>Datensatz öffnen und als Administrator anmelden, um Sicherungsstände anzuzeigen.</p>';
       return;
     }
@@ -408,6 +433,21 @@
     }
   }
 
+  function integrationStatus() {
+    const context = runtimeDataset();
+    return {
+      datasetName: context.name,
+      datasetLoaded: context.loaded,
+      imageCount: context.images.length,
+      adminActive: Boolean(activeAdminToken()),
+      bridgeActive: Boolean(window.FarbatlasRuntime?.getDataset),
+    };
+  }
+
+  function refreshIntegration() {
+    if (!el('#imageCompressionPanel')?.classList.contains('hidden')) loadRuns();
+  }
+
   function installUi() {
     const anchor = el('#datasetAdminPanel');
     if (!anchor || el('#imageCompressionToggle')) return;
@@ -447,7 +487,21 @@
     el('#imageCompressionStart').onclick = compressAll;
     el('#imageCompressionStop').onclick = () => { state.stop = true; el('#imageCompressionStop').disabled = true; };
     el('#imageCompressionRefreshRuns').onclick = loadRuns;
+    window.addEventListener('farbatlas:dataset-changed', () => {
+      state.analysis = null;
+      el('#imageCompressionStart').disabled = true;
+      setStatus('Datensatz erkannt. Die Bildprüfung kann gestartet werden.');
+      refreshIntegration();
+    });
+    if (typeof MutationObserver !== 'undefined') {
+      new MutationObserver(refreshIntegration).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    }
   }
+
+  window.FarbatlasImageCompressionIntegration = Object.freeze({
+    diagnose: integrationStatus,
+    refresh: refreshIntegration,
+  });
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installUi);
   else installUi();

@@ -1,6 +1,18 @@
 # Farbatlas – administrative Bildprüfung mit reversibler Komprimierung
 
-Version 1.0 · 25. November 2026
+Version 1.1 · 25. November 2026
+
+## Korrektur in Version 1.1
+
+Version 1.0 erkannte einen über den V10-Lader geöffneten Datensatz nicht zuverlässig: Der Lader setzte zwar den Ladezustand und die Bilder, schrieb den Namen aber nur in seine private Variable `v10Name`. Die Komprimierungsoberfläche fragte dagegen `currentDatasetName` ab. Die aktive Admin-Sitzung wurde außerdem nur über die interne Variable `adminToken` geprüft.
+
+Version 1.1 behebt beides:
+
+- `v10-client.js` veröffentlicht Name, Ladezustand und Bilder über eine gemeinsame Laufzeit-Schnittstelle.
+- Der geladene Datensatz wird gleichzeitig mit `currentDatasetName` und der Datensatzanzeige synchronisiert.
+- Die Komprimierungsfunktion verwendet die Laufzeit-Schnittstelle und besitzt zusätzlich kompatible Fallbacks für den bisherigen V10-Stand.
+- Die Admin-Sitzung wird primär über den bestehenden Session-Storage-Schlüssel `farbatlasAdminTokenV09` erkannt.
+- Datensatzwechsel und Änderungen des Admin-Modus aktualisieren den Komprimierungsbereich automatisch.
 
 ## Zweck
 
@@ -23,11 +35,13 @@ Diese Dateien werden in das Root-Verzeichnis des bestehenden Projekts kopiert:
 
 ```text
 image-compression-client.js
+v10-client.js
 inject-v10.mjs
 package.json
 netlify/functions/farbatlas.mjs
 netlify/functions/lib/image-compression-utils.mjs
 test/image-compression-utils.test.mjs
+test/image-compression-integration.test.mjs
 ```
 
 Die Erweiterung setzt die bereits produktive V10-Bildspeicherung und die Kursleiter-Arbeitsversion voraus.
@@ -102,7 +116,10 @@ Jeder Lauf besitzt einen eigenen Sicherungsstand. Beim Wiederherstellen gelten f
 Der Lieferstand wurde geprüft mit:
 
 - Syntaxprüfung aller neuen und geänderten JavaScript-/MJS-Dateien
-- 14 von 14 Unit-Tests bestanden
+- 17 von 17 Unit- und Integrationstests bestanden
+- Regressionstest: alter V10-Zustand mit leerem `currentDatasetName` wird über Eingabefeld, Ladezustand und Bildliste korrekt erkannt
+- Regressionstest: neuer V10-Lader veröffentlicht „Rotes Meer“, Ladezustand und Bilder über die gemeinsame Laufzeit-Schnittstelle
+- Regressionstest: aktive Admin-Sitzung wird aus dem Session Storage erkannt
 - wiederholbare Build-Injektion ohne doppelte Script-Verweise
 - vollständiger Server-Rundlauf mit Testbild: 800.000 Byte → 350.000 Byte → Wiederherstellung
 - bytegenaue Gleichheit des wiederhergestellten Testbilds
