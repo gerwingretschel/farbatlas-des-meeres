@@ -24,6 +24,7 @@
   let currentFolderId = null;
   let datasetPassword = '';
   let loading = false;
+  let uploadInProgress = false;
   const expandedFolderIds = new Set();
 
   function activeToken() {
@@ -119,6 +120,91 @@
     if (!element) return;
     element.className = `materials-status ${type}`;
     element.textContent = message;
+  }
+
+  function installUploadProgressStyles() {
+    if (q('#materialsUploadProgressStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'materialsUploadProgressStyles';
+    style.textContent = `
+      .materials-upload-progress{margin:12px 0;padding:14px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;color:#0f172a}
+      .materials-upload-progress.hidden{display:none}
+      .materials-upload-progress-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+      .materials-upload-progress h2{font-size:1rem;line-height:1.3;margin:0 0 3px}
+      .materials-upload-summary{font-size:.9rem;color:#475569}
+      .materials-upload-overall{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;margin-bottom:12px}
+      .materials-upload-overall progress,.materials-upload-item progress{width:100%;height:10px;accent-color:#0f766e}
+      .materials-upload-percent{min-width:3.5em;text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+      .materials-upload-list{display:grid;gap:8px}
+      .materials-upload-item{padding:10px;border:1px solid #e2e8f0;border-radius:9px;background:#fff}
+      .materials-upload-item[data-state="success"]{border-color:#86efac;background:#f0fdf4}
+      .materials-upload-item[data-state="error"]{border-color:#fca5a5;background:#fef2f2}
+      .materials-upload-item[data-state="skipped"]{background:#f1f5f9}
+      .materials-upload-item-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
+      .materials-upload-name{overflow-wrap:anywhere;font-weight:700}
+      .materials-upload-size{white-space:nowrap;color:#64748b;font-size:.85rem}
+      .materials-upload-item-bar{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px}
+      .materials-upload-stage{margin-top:5px;color:#475569;font-size:.85rem;min-height:1.2em}
+      #materialsUploadLabel.is-disabled{opacity:.55;pointer-events:none}
+      @media (max-width:600px){.materials-upload-progress{padding:11px}.materials-upload-progress-head,.materials-upload-item-head{align-items:flex-start}.materials-upload-size{white-space:normal;text-align:right}}
+    `;
+    document.head.append(style);
+  }
+
+  function updateUploadOverview(items, summary = '') {
+    const totalWeight = items.reduce((sum, item) => sum + Math.max(1, item.file.size), 0);
+    const weightedProgress = items.reduce((sum, item) => sum + Math.max(1, item.file.size) * item.progress, 0);
+    const percent = Math.round(weightedProgress / Math.max(1, totalWeight));
+    const progress = q('#materialsUploadOverallProgress');
+    const percentLabel = q('#materialsUploadOverallPercent');
+    if (progress) progress.value = percent;
+    if (percentLabel) percentLabel.textContent = `${percent} %`;
+    if (summary) q('#materialsUploadSummary').textContent = summary;
+  }
+
+  function updateUploadItem(items, index, { progress, state, stage, detail } = {}) {
+    const item = items[index];
+    if (!item) return;
+    if (Number.isFinite(progress)) item.progress = Math.max(0, Math.min(100, Math.round(progress)));
+    if (state) item.state = state;
+    const row = q(`[data-material-upload-row="${index}"]`);
+    if (row) {
+      row.dataset.state = item.state;
+      const bar = row.querySelector('progress');
+      const percentLabel = row.querySelector('.materials-upload-percent');
+      const stageLabel = row.querySelector('.materials-upload-stage');
+      if (bar) bar.value = item.progress;
+      if (percentLabel) percentLabel.textContent = `${item.progress} %`;
+      if (stageLabel && stage) stageLabel.textContent = detail ? `${stage} · ${detail}` : stage;
+    }
+    updateUploadOverview(items);
+  }
+
+  function createUploadProgress(files) {
+    installUploadProgressStyles();
+    const items = files.map((file) => ({ file, progress: 0, state: 'waiting' }));
+    const panel = q('#materialsUploadProgress');
+    panel.classList.remove('hidden');
+    q('#materialsUploadSummary').textContent = `${files.length} ${files.length === 1 ? 'PDF ist' : 'PDFs sind'} für den Upload vorgemerkt.`;
+    q('#materialsUploadList').innerHTML = items.map((item, index) => `
+      <div class="materials-upload-item" data-material-upload-row="${index}" data-state="waiting">
+        <div class="materials-upload-item-head"><span class="materials-upload-name">${escapeHtml(item.file.name)}</span><span class="materials-upload-size">${formatBytes(item.file.size)}</span></div>
+        <div class="materials-upload-item-bar"><progress max="100" value="0" aria-label="Upload-Fortschritt für ${escapeHtml(item.file.name)}"></progress><span class="materials-upload-percent">0 %</span></div>
+        <div class="materials-upload-stage">Wartet auf den Upload …</div>
+      </div>`).join('');
+    q('#materialsUploadProgressClose').disabled = true;
+    updateUploadOverview(items);
+    return items;
+  }
+
+  function setUploadInputDisabled(disabled) {
+    const input = q('#materialsUploadInput');
+    if (input) input.disabled = disabled;
+    const label = q('#materialsUploadLabel');
+    if (label) {
+      label.classList.toggle('is-disabled', disabled);
+      label.setAttribute('aria-disabled', String(disabled));
+    }
   }
 
   async function loadManifest({ quiet = false } = {}) {
@@ -363,41 +449,85 @@
   }
 
   async function uploadFiles(files) {
-    if (!files.length) return;
-    for (const file of files) {
-      try {
-        if (!/\.pdf$/i.test(file.name) || !['application/pdf', 'application/octet-stream', ''].includes(file.type)) throw new Error(`${file.name}: nur PDF-Dateien sind erlaubt.`);
-        if (file.size > MAXIMUM_BYTES) throw new Error(`${file.name}: maximal 50 MB pro PDF.`);
-        if (file.size > WARNING_BYTES && !confirm(`Große PDF-Datei\n\n„${file.name}“ ist ${formatBytes(file.size)} groß. Große Dateien benötigen beim Öffnen und bei der Offline-Vorbereitung mehr Datenvolumen und Speicherplatz.\n\nTrotzdem hochladen?`)) continue;
-        const buffer = await file.arrayBuffer();
-        const signature = new TextDecoder('ascii').decode(new Uint8Array(buffer, 0, Math.min(5, buffer.byteLength)));
-        if (signature !== '%PDF-') throw new Error(`${file.name}: keine gültige PDF-Kennung.`);
-        status(`${file.name}: Prüfsumme wird berechnet …`);
-        const checksum = await sha256(buffer);
-        let pageCount = 0;
-        try { pageCount = (await window.FarbatlasPdfViewer.inspect(new Blob([buffer], { type: 'application/pdf' }))).pageCount; } catch { /* optional metadata */ }
-        const start = await request('material-upload-start', {
-          name: datasetName(), parentId: currentFolderId, title: file.name.replace(/\.pdf$/i, ''), fileName: file.name,
-          bytes: file.size, pageCount, sha256: checksum, expectedVersion: manifest.version,
-        });
-        const bytes = new Uint8Array(buffer);
-        for (let index = 0; index < start.chunkCount; index += 1) {
-          const chunk = bytes.subarray(index * start.chunkSize, Math.min(bytes.length, (index + 1) * start.chunkSize));
-          status(`${file.name}: Abschnitt ${index + 1} von ${start.chunkCount} wird hochgeladen …`);
-          await request('material-upload-chunk', { name: datasetName(), uploadId: start.uploadId, chunkIndex: index, data: bytesBase64(chunk) });
+    if (!files.length || uploadInProgress) return;
+    uploadInProgress = true;
+    setUploadInputDisabled(true);
+    const items = createUploadProgress(files);
+    q('#materialsUploadProgress')?.setAttribute('aria-busy', 'true');
+    let completed = 0;
+    let skipped = 0;
+    let failed = false;
+    try {
+      for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+        const file = files[fileIndex];
+        try {
+          updateUploadItem(items, fileIndex, { progress: 1, state: 'active', stage: 'Datei wird geprüft' });
+          updateUploadOverview(items, `PDF ${fileIndex + 1} von ${files.length}: „${file.name}“`);
+          if (!/\.pdf$/i.test(file.name) || !['application/pdf', 'application/octet-stream', ''].includes(file.type)) throw new Error(`${file.name}: nur PDF-Dateien sind erlaubt.`);
+          if (file.size > MAXIMUM_BYTES) throw new Error(`${file.name}: maximal 50 MB pro PDF.`);
+          if (file.size > WARNING_BYTES && !confirm(`Große PDF-Datei\n\n„${file.name}“ ist ${formatBytes(file.size)} groß. Große Dateien benötigen beim Öffnen und bei der Offline-Vorbereitung mehr Datenvolumen und Speicherplatz.\n\nTrotzdem hochladen?`)) {
+            skipped += 1;
+            updateUploadItem(items, fileIndex, { progress: 100, state: 'skipped', stage: 'Übersprungen' });
+            continue;
+          }
+          updateUploadItem(items, fileIndex, { progress: 3, stage: 'PDF wird lokal eingelesen' });
+          const buffer = await file.arrayBuffer();
+          const signature = new TextDecoder('ascii').decode(new Uint8Array(buffer, 0, Math.min(5, buffer.byteLength)));
+          if (signature !== '%PDF-') throw new Error(`${file.name}: keine gültige PDF-Kennung.`);
+          status(`${file.name}: Prüfsumme wird berechnet …`);
+          updateUploadItem(items, fileIndex, { progress: 6, stage: 'Prüfsumme wird berechnet' });
+          const checksum = await sha256(buffer);
+          let pageCount = 0;
+          updateUploadItem(items, fileIndex, { progress: 10, stage: 'PDF-Seiten werden analysiert' });
+          try { pageCount = (await window.FarbatlasPdfViewer.inspect(new Blob([buffer], { type: 'application/pdf' }))).pageCount; } catch { /* optional metadata */ }
+          updateUploadItem(items, fileIndex, { progress: 12, stage: 'Upload wird gestartet' });
+          const start = await request('material-upload-start', {
+            name: datasetName(), parentId: currentFolderId, title: file.name.replace(/\.pdf$/i, ''), fileName: file.name,
+            bytes: file.size, pageCount, sha256: checksum, expectedVersion: manifest.version,
+          });
+          const bytes = new Uint8Array(buffer);
+          for (let index = 0; index < start.chunkCount; index += 1) {
+            const chunk = bytes.subarray(index * start.chunkSize, Math.min(bytes.length, (index + 1) * start.chunkSize));
+            status(`${file.name}: Abschnitt ${index + 1} von ${start.chunkCount} wird hochgeladen …`);
+            await request('material-upload-chunk', { name: datasetName(), uploadId: start.uploadId, chunkIndex: index, data: bytesBase64(chunk) });
+            const uploadedBytes = Math.min(bytes.length, (index + 1) * start.chunkSize);
+            updateUploadItem(items, fileIndex, {
+              progress: 15 + (uploadedBytes / Math.max(1, bytes.length)) * 75,
+              state: 'active',
+              stage: 'Wird hochgeladen',
+              detail: `${formatBytes(uploadedBytes)} von ${formatBytes(bytes.length)} · Abschnitt ${index + 1} von ${start.chunkCount}`,
+            });
+          }
+          status(`${file.name}: Upload wird geprüft und veröffentlicht …`);
+          updateUploadItem(items, fileIndex, { progress: 95, state: 'active', stage: 'Wird serverseitig geprüft und veröffentlicht' });
+          const result = await request('material-upload-finish', { name: datasetName(), uploadId: start.uploadId });
+          manifest = result.manifest;
+          await dbPut(MANIFEST_STORE, manifestCacheKey(), manifest).catch(() => {});
+          renderLibrary();
+          completed += 1;
+          updateUploadItem(items, fileIndex, { progress: 100, state: 'success', stage: 'Erfolgreich veröffentlicht', detail: formatBytes(file.size) });
+          status(`${file.name}: PDF wurde erfolgreich veröffentlicht.`, 'success');
+        } catch (error) {
+          failed = true;
+          updateUploadItem(items, fileIndex, { state: 'error', stage: 'Upload fehlgeschlagen', detail: error.message });
+          updateUploadOverview(items, `Upload unterbrochen: ${completed} von ${files.length} PDF(s) veröffentlicht.`);
+          status(error.message, 'error');
+          break;
         }
-        status(`${file.name}: Upload wird geprüft und veröffentlicht …`);
-        const result = await request('material-upload-finish', { name: datasetName(), uploadId: start.uploadId });
-        manifest = result.manifest;
-        await dbPut(MANIFEST_STORE, manifestCacheKey(), manifest).catch(() => {});
-        renderLibrary();
-        status(`${file.name}: PDF wurde erfolgreich veröffentlicht.`, 'success');
-      } catch (error) {
-        status(error.message, 'error');
-        break;
       }
+      if (!failed) {
+        const skippedText = skipped ? `, ${skipped} übersprungen` : '';
+        updateUploadOverview(items, `Upload abgeschlossen: ${completed} veröffentlicht${skippedText}.`);
+      }
+    } finally {
+      uploadInProgress = false;
+      setUploadInputDisabled(false);
+      q('#materialsUploadProgress')?.setAttribute('aria-busy', 'false');
+      const closeButton = q('#materialsUploadProgressClose');
+      if (closeButton) closeButton.disabled = false;
+      const input = q('#materialsUploadInput');
+      if (input) input.value = '';
     }
-    q('#materialsUploadInput').value = '';
   }
 
   async function prepareMaterialsOffline() {
@@ -459,7 +589,12 @@
     main.insertAdjacentHTML('beforeend', `
       <section id="learningMaterials" class="learning-materials hidden">
         <div class="materials-heading"><div><h1>📚 Lernmaterialien</h1><p>PDF-Folien des geöffneten Datensatzes. Dateien werden erst beim Öffnen oder bei der Offline-Vorbereitung geladen.</p></div><button id="materialsClose" class="btn">← Zum Atlas</button></div>
-        <div id="materialsManagement" class="materials-management hidden"><button id="materialsNewFolder" class="btn primary">📁 Neuer Ordner</button><label class="btn good">📄 PDF hochladen<input id="materialsUploadInput" hidden type="file" accept="application/pdf,.pdf" multiple></label></div>
+        <div id="materialsManagement" class="materials-management hidden"><button id="materialsNewFolder" class="btn primary">📁 Neuer Ordner</button><label id="materialsUploadLabel" class="btn good">📄 PDF hochladen<input id="materialsUploadInput" hidden type="file" accept="application/pdf,.pdf" multiple></label></div>
+        <div id="materialsUploadProgress" class="materials-upload-progress hidden" role="region" aria-labelledby="materialsUploadProgressTitle" aria-live="polite">
+          <div class="materials-upload-progress-head"><div><h2 id="materialsUploadProgressTitle">PDF-Upload</h2><div id="materialsUploadSummary" class="materials-upload-summary"></div></div><button id="materialsUploadProgressClose" class="btn" type="button">Verlauf ausblenden</button></div>
+          <div class="materials-upload-overall"><progress id="materialsUploadOverallProgress" max="100" value="0" aria-label="Gesamtfortschritt"></progress><span id="materialsUploadOverallPercent" class="materials-upload-percent">0 %</span></div>
+          <div id="materialsUploadList" class="materials-upload-list"></div>
+        </div>
         <div id="materialsStatus" class="materials-status">Bitte einen Datensatz öffnen.</div>
         <div id="materialsBreadcrumbs" class="materials-breadcrumbs"></div>
         <div class="materials-layout"><nav id="materialsTree" class="materials-tree" aria-label="Materialordner"></nav><div id="materialsContent" class="materials-content"></div></div>
@@ -468,6 +603,9 @@
     q('#materialsClose').onclick = () => leaveLibrary('#atlas');
     q('#materialsNewFolder').onclick = createFolder;
     q('#materialsUploadInput').onchange = (event) => uploadFiles([...event.target.files]);
+    q('#materialsUploadProgressClose').onclick = () => {
+      if (!uploadInProgress) q('#materialsUploadProgress').classList.add('hidden');
+    };
     q('#atlasBtn')?.addEventListener('click', () => leaveLibrary('#atlas'));
     q('#learnBtn')?.addEventListener('click', () => leaveLibrary('#learning'));
 

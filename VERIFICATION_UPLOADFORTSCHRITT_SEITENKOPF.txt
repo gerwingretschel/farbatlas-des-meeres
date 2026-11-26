@@ -1,0 +1,43 @@
+FARBATLAS – VERIFIKATION PDF-UPLOADFORTSCHRITT UND SEITENKOPF
+Stand: 2026-11-26
+Basis: Farbatlas_des_Meeres_Audit_2026-11-26_200254.txt
+
+ERGEBNIS
+- JavaScript-Syntaxprüfung learning-materials-client.js: BESTANDEN
+- JavaScript-Syntaxprüfung learning-materials-viewer.js: BESTANDEN
+- Neue gezielte Regressionstests: 9 von 9 BESTANDEN
+- Bestehende Lernmaterial-Integrationstests: 10 von 10 BESTANDEN
+- Gesamt: 19 von 19 Tests BESTANDEN
+- Patch-Anwendung gegen den aktuellen Audit-Stand: BESTANDEN
+- Dateiabgleich nach Patch-Anwendung: BESTANDEN
+
+GEPRÜFTER UPLOADVERLAUF
+- Gesamtfortschritt ist sichtbar und nach Dateigröße gewichtet.
+- Jede ausgewählte PDF besitzt eine eigene Fortschrittszeile.
+- Prüfen, Einlesen, Prüfsumme, Seitenanalyse, Start, Abschnitts-Upload,
+  serverseitige Prüfung, Erfolg, Überspringen und Fehler werden angezeigt.
+- Übertragene Bytes sowie aktueller und gesamter Abschnitt werden angezeigt.
+- Parallele zweite Dateiauswahl ist während des Uploads gesperrt.
+- 5-MB-Warnung, 50-MB-Maximum, PDF-Signaturprüfung und bestehende
+  material-upload-start/chunk/finish-Aufrufe bleiben erhalten.
+
+GEPRÜFTES SEITENVERHALTEN
+- Öffnen beginnt am Kopf der gewählten Seite.
+- Vorherige/Nächste Seite beginnt am Seitenkopf.
+- Direkte Seitennummereingabe beginnt am Seitenkopf.
+- Miniaturauswahl beginnt am Seitenkopf.
+- Tastatur- und Wisch-Seitenwechsel verwenden denselben korrigierten Pfad.
+- Die horizontale Zentrierung bleibt beim vertikalen Rücksprung erhalten.
+
+UNVERÄNDERTE VIEWER-FUNKTIONEN
+- Breitenanpassung: unveränderte Formel
+- Ganze Seite: unveränderte Formel
+- Fenster füllen: unveränderte Formel
+- Freier Zoom bis 600 Prozent: erhalten
+- Verschieben, Pinch-Zoom, Vollbild und Einzel-/Doppelseite: erhalten
+
+SCOPE-PRÜFUNG
+- Keine Änderung an Serverdateien.
+- Keine Änderung an CSS-Dateien.
+- Keine Änderung am KL-Speicherpfad.
+- Keine Änderung an Offline- oder Datensparfunktionen.

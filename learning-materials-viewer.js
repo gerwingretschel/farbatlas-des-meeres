@@ -150,7 +150,7 @@
       state.document = await library.getDocument({ data: bytes }).promise;
       state.page = clamp(state.page, 1, state.document.numPages);
       buildThumbnails();
-      await applyFit('page');
+      await applyFit('page', { top: true });
       q('#pdfStage').focus();
     } catch (error) {
       q('#pdfPages').innerHTML = `<div class="pdf-error"><h2>PDF konnte nicht geöffnet werden</h2><p>${escapeHtml(error.message || String(error))}</p></div>`;
@@ -217,11 +217,11 @@
     return widthScale;
   }
 
-  async function applyFit(mode) {
+  async function applyFit(mode, { top = false } = {}) {
     if (!state.document) return;
     state.fit = mode;
     state.scale = clamp(await calculateFitScale(mode), MIN_SCALE, MAX_SCALE);
-    await renderPages({ center: true });
+    await renderPages({ center: true, top });
   }
 
   function viewRatios(stage) {
@@ -283,7 +283,7 @@
     if (!state.document) return;
     state.page = clamp(Math.round(page || 1), 1, state.document.numPages);
     if (state.fit === 'custom') await renderPages({ center: true, top: true });
-    else await applyFit(state.fit);
+    else await applyFit(state.fit, { top: true });
   }
 
   function setScale(scale, render = true) {
