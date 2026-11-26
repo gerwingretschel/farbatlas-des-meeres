@@ -20,6 +20,21 @@ test('server exposes listing, chunked upload/download and material administratio
   assert.match(server, /hash\.digest\("hex"\) !== meta\.sha256/);
 });
 
+test('public material read routes are dispatched by the main handler before login-only routes', () => {
+  const handlerStart = server.indexOf('export default async (req) =>');
+  const listRoute = server.indexOf('if (body.action === "material-list")');
+  const downloadRoute = server.indexOf('if (body.action === "material-download-chunk")');
+  const actorGate = server.indexOf('const actor = await principal(req, stores.courseLeaders);', handlerStart);
+  const authenticateDatasetStart = server.indexOf('async function authenticateDataset');
+  const authenticateDatasetEnd = server.indexOf('async function listDatasets', authenticateDatasetStart);
+  const authenticateDatasetBody = server.slice(authenticateDatasetStart, authenticateDatasetEnd);
+
+  assert.ok(handlerStart >= 0 && listRoute > handlerStart, 'material-list must be in the request handler');
+  assert.ok(downloadRoute > listRoute, 'download route must follow material-list');
+  assert.ok(actorGate > downloadRoute, 'read routes must run before the login-only principal gate');
+  assert.doesNotMatch(authenticateDatasetBody, /material-list|material-download-chunk/);
+});
+
 test('dataset deletion cleans material manifests, chunks, uploads and audit records', () => {
   assert.match(server, /deleteDatasetMaterials\(stores, name\)/);
   assert.match(server, /deletedMaterialChunks/);

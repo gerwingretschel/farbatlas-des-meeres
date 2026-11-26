@@ -283,35 +283,6 @@ async function authenticateDataset(req, stores, body) {
   const claims = readToken(req);
   if (claims?.role === "courseLeader") {
 
-    if (body.action === "material-list") {
-      const { entry } = await authenticateMaterialRead(req, stores, body);
-      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
-      return reply({ manifest: publicMaterialManifest(manifestEntry.data) });
-    }
-    if (body.action === "material-download-chunk") {
-      const { entry } = await authenticateMaterialRead(req, stores, body);
-      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
-      const materialId = validateMaterialId(body.materialId);
-      const node = manifestEntry.data.nodes.find((candidate) => candidate.id === materialId && candidate.type === "pdf");
-      if (!node) throw new ValidationError("PDF wurde nicht gefunden.", 404);
-      const index = Number(body.chunkIndex);
-      if (!Number.isInteger(index) || index < 0 || index >= Number(node.chunkCount)) {
-        throw new ValidationError("Ungültiger PDF-Abschnitt.");
-      }
-      const bytes = await stores.materialFiles.get(materialFileKey(materialId, index), { type: "arrayBuffer" });
-      if (!bytes) throw new ValidationError("PDF-Abschnitt wurde nicht gefunden.", 404);
-      const metadata = await stores.materialFiles.getMetadata(materialFileKey(materialId, index));
-      if (metadata?.metadata?.dataset !== datasetKey(entry.data.name)) {
-        throw new ValidationError("PDF gehört nicht zu diesem Datensatz.", 403);
-      }
-      return reply({
-        materialId,
-        chunkIndex: index,
-        chunkCount: node.chunkCount,
-        data: Buffer.from(bytes).toString("base64"),
-        type: "application/pdf",
-      });
-    }
 
     const actor = await principal(req, stores.courseLeaders);
     assertAssigned(actor.user, body.name);
@@ -723,6 +694,36 @@ export default async (req) => {
       return reply({
         data: Buffer.from(arrayBuffer).toString("base64"),
         type: metadata?.metadata?.contentType || "image/jpeg",
+      });
+    }
+
+    if (body.action === "material-list") {
+      const { entry } = await authenticateMaterialRead(req, stores, body);
+      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
+      return reply({ manifest: publicMaterialManifest(manifestEntry.data) });
+    }
+    if (body.action === "material-download-chunk") {
+      const { entry } = await authenticateMaterialRead(req, stores, body);
+      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
+      const materialId = validateMaterialId(body.materialId);
+      const node = manifestEntry.data.nodes.find((candidate) => candidate.id === materialId && candidate.type === "pdf");
+      if (!node) throw new ValidationError("PDF wurde nicht gefunden.", 404);
+      const index = Number(body.chunkIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= Number(node.chunkCount)) {
+        throw new ValidationError("Ungültiger PDF-Abschnitt.");
+      }
+      const bytes = await stores.materialFiles.get(materialFileKey(materialId, index), { type: "arrayBuffer" });
+      if (!bytes) throw new ValidationError("PDF-Abschnitt wurde nicht gefunden.", 404);
+      const metadata = await stores.materialFiles.getMetadata(materialFileKey(materialId, index));
+      if (metadata?.metadata?.dataset !== datasetKey(entry.data.name)) {
+        throw new ValidationError("PDF gehört nicht zu diesem Datensatz.", 403);
+      }
+      return reply({
+        materialId,
+        chunkIndex: index,
+        chunkCount: node.chunkCount,
+        data: Buffer.from(bytes).toString("base64"),
+        type: "application/pdf",
       });
     }
 

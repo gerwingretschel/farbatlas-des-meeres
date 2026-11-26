@@ -1,0 +1,103 @@
+diff --git a/netlify/functions/farbatlas.mjs b/netlify/functions/farbatlas.mjs
+index 9040ac9..dd36f98 100644
+--- a/netlify/functions/farbatlas.mjs
++++ b/netlify/functions/farbatlas.mjs
+@@ -283,35 +283,6 @@ async function authenticateDataset(req, stores, body) {
+   const claims = readToken(req);
+   if (claims?.role === "courseLeader") {
+ 
+-    if (body.action === "material-list") {
+-      const { entry } = await authenticateMaterialRead(req, stores, body);
+-      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
+-      return reply({ manifest: publicMaterialManifest(manifestEntry.data) });
+-    }
+-    if (body.action === "material-download-chunk") {
+-      const { entry } = await authenticateMaterialRead(req, stores, body);
+-      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
+-      const materialId = validateMaterialId(body.materialId);
+-      const node = manifestEntry.data.nodes.find((candidate) => candidate.id === materialId && candidate.type === "pdf");
+-      if (!node) throw new ValidationError("PDF wurde nicht gefunden.", 404);
+-      const index = Number(body.chunkIndex);
+-      if (!Number.isInteger(index) || index < 0 || index >= Number(node.chunkCount)) {
+-        throw new ValidationError("Ungültiger PDF-Abschnitt.");
+-      }
+-      const bytes = await stores.materialFiles.get(materialFileKey(materialId, index), { type: "arrayBuffer" });
+-      if (!bytes) throw new ValidationError("PDF-Abschnitt wurde nicht gefunden.", 404);
+-      const metadata = await stores.materialFiles.getMetadata(materialFileKey(materialId, index));
+-      if (metadata?.metadata?.dataset !== datasetKey(entry.data.name)) {
+-        throw new ValidationError("PDF gehört nicht zu diesem Datensatz.", 403);
+-      }
+-      return reply({
+-        materialId,
+-        chunkIndex: index,
+-        chunkCount: node.chunkCount,
+-        data: Buffer.from(bytes).toString("base64"),
+-        type: "application/pdf",
+-      });
+-    }
+ 
+     const actor = await principal(req, stores.courseLeaders);
+     assertAssigned(actor.user, body.name);
+@@ -726,6 +697,36 @@ export default async (req) => {
+       });
+     }
+ 
++    if (body.action === "material-list") {
++      const { entry } = await authenticateMaterialRead(req, stores, body);
++      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
++      return reply({ manifest: publicMaterialManifest(manifestEntry.data) });
++    }
++    if (body.action === "material-download-chunk") {
++      const { entry } = await authenticateMaterialRead(req, stores, body);
++      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
++      const materialId = validateMaterialId(body.materialId);
++      const node = manifestEntry.data.nodes.find((candidate) => candidate.id === materialId && candidate.type === "pdf");
++      if (!node) throw new ValidationError("PDF wurde nicht gefunden.", 404);
++      const index = Number(body.chunkIndex);
++      if (!Number.isInteger(index) || index < 0 || index >= Number(node.chunkCount)) {
++        throw new ValidationError("Ungültiger PDF-Abschnitt.");
++      }
++      const bytes = await stores.materialFiles.get(materialFileKey(materialId, index), { type: "arrayBuffer" });
++      if (!bytes) throw new ValidationError("PDF-Abschnitt wurde nicht gefunden.", 404);
++      const metadata = await stores.materialFiles.getMetadata(materialFileKey(materialId, index));
++      if (metadata?.metadata?.dataset !== datasetKey(entry.data.name)) {
++        throw new ValidationError("PDF gehört nicht zu diesem Datensatz.", 403);
++      }
++      return reply({
++        materialId,
++        chunkIndex: index,
++        chunkCount: node.chunkCount,
++        data: Buffer.from(bytes).toString("base64"),
++        type: "application/pdf",
++      });
++    }
++
+     const actor = await principal(req, stores.courseLeaders);
+ 
+ 
+diff --git a/test/learning-materials-integration.test.mjs b/test/learning-materials-integration.test.mjs
+index 6fc79c1..730e627 100755
+--- a/test/learning-materials-integration.test.mjs
++++ b/test/learning-materials-integration.test.mjs
+@@ -20,6 +20,21 @@ test('server exposes listing, chunked upload/download and material administratio
+   assert.match(server, /hash\.digest\("hex"\) !== meta\.sha256/);
+ });
+ 
++test('public material read routes are dispatched by the main handler before login-only routes', () => {
++  const handlerStart = server.indexOf('export default async (req) =>');
++  const listRoute = server.indexOf('if (body.action === "material-list")');
++  const downloadRoute = server.indexOf('if (body.action === "material-download-chunk")');
++  const actorGate = server.indexOf('const actor = await principal(req, stores.courseLeaders);', handlerStart);
++  const authenticateDatasetStart = server.indexOf('async function authenticateDataset');
++  const authenticateDatasetEnd = server.indexOf('async function listDatasets', authenticateDatasetStart);
++  const authenticateDatasetBody = server.slice(authenticateDatasetStart, authenticateDatasetEnd);
++
++  assert.ok(handlerStart >= 0 && listRoute > handlerStart, 'material-list must be in the request handler');
++  assert.ok(downloadRoute > listRoute, 'download route must follow material-list');
++  assert.ok(actorGate > downloadRoute, 'read routes must run before the login-only principal gate');
++  assert.doesNotMatch(authenticateDatasetBody, /material-list|material-download-chunk/);
++});
++
+ test('dataset deletion cleans material manifests, chunks, uploads and audit records', () => {
+   assert.match(server, /deleteDatasetMaterials\(stores, name\)/);
+   assert.match(server, /deletedMaterialChunks/);
