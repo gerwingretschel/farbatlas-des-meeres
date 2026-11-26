@@ -70,6 +70,7 @@ test('compression integration reads the explicit runtime bridge', () => {
 test('V10 opening publishes the loaded dataset to the shared runtime bridge', async () => {
   const listeners = {};
   const events = [];
+  const actions = [];
   const elements = {
     '#openDatasetName': { value: 'Rotes Meer' },
     '#openDatasetPassword': { value: 'dataset-password' },
@@ -107,6 +108,7 @@ test('V10 opening publishes the loaded dataset to the shared runtime bridge', as
     },
     fetch: async (_url, options) => {
       const request = JSON.parse(options.body);
+      actions.push(request.action);
       return { ok: true, status: 200, text: async () => JSON.stringify(responses[request.action]) };
     },
     updateDatasetIndicator: () => {},
@@ -128,4 +130,5 @@ test('V10 opening publishes the loaded dataset to the shared runtime bridge', as
   assert.equal(context.FarbatlasRuntime.getDataset().images.length, 1);
   assert.equal(events.at(-1).type, 'farbatlas:dataset-changed');
   assert.equal(events.at(-1).detail.name, 'Rotes Meer');
+  assert.deepEqual(actions, ['load'], 'opening must load metadata only, not the teaching image');
 });

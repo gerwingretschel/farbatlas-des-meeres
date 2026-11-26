@@ -1,0 +1,35 @@
+FARBATLAS DES MEERES – VERIFIKATION THUMBNAIL / LAZY LOADING
+Stand: 2026-11-26
+
+ERGEBNIS
+- node --check: erfolgreich
+- node --test: 27 bestanden, 0 fehlgeschlagen
+- node inject-v10.mjs: erfolgreich
+
+ABGEDECKTE SICHERHEITSREGELN
+- Öffnen eines V11-Datensatzes lädt nur Metadaten, keine Unterrichtsbilder.
+- Unterrichtsbild: JPEG, max. 1.600 px, max. 400 KB.
+- Vorschaubild: JPEG/WebP serverseitig, max. 500 px, max. 90 KB.
+- Thumbnail-Schlüssel sind deterministisch und an Unterrichtsbild-Schlüssel gebunden.
+- Status unterscheidet aktuell, fehlend, veraltet, beschädigt und fehlendes Unterrichtsbild.
+- Thumbnail-Verwaltung schreibt ausschließlich den Thumbnail-Schlüssel; das Unterrichtsbild wird nur gelesen.
+- Änderung eines Unterrichtsbilds markiert ein vorhandenes Vorschaubild als veraltet.
+- Lazy Loading verwendet IntersectionObserver.
+- Datensparmodus verlangt eine bewusste Aktion vor dem Laden des Unterrichtsbilds.
+- Offline-Vorbereitung bietet Vorschaubild- und Komplettstufe.
+- Neuer Import erzeugt und überträgt Unterrichtsbild und Vorschaubild als Paar.
+
+REGRESSIONEN
+- Bestehende Kursleiter-, Bildkomprimierungs- und Hilfsfunktionen: Tests bestanden.
+- Administrative Bildkomprimierung lädt für ihre Prüfung ausdrücklich Unterrichtsbilder und analysiert nicht versehentlich Vorschaubilder.
+
+UMGEBUNGSHINWEIS
+Die Paketinstallation über den Microsoft-internen npm-Proxy war in der Ausführungsumgebung mit HTTP 403 gesperrt. Syntaxprüfung, vollständige lokale Testsuite und Build liefen dennoch erfolgreich, da die dafür benötigten Projektdateien vorhanden waren. Auf dem Projekt-Mac bitte wie dokumentiert zuerst `npm install` ausführen.
+
+NOCH IM ECHTEN BRANCH-DEPLOY ZU PRÜFEN
+- Netlify Blobs mit dem produktionsnahen Datensatz „Rotes Meer“.
+- Erzeugung des vollständigen Thumbnail-Bestands.
+- Übertragungsvolumen und Startzeit vorher/nachher.
+- Mobile Darstellung und langsame Verbindung.
+- Beide Offline-Stufen auf demselben Gerät/Browser.
+- Stichproben der bestehenden Unterrichtsbilder.
