@@ -581,7 +581,9 @@ export default async (req) => {
       if (!change) throw new ValidationError("Änderung nicht gefunden.", 404);
       const changes = change.field === "knowledge"
         ? { knowledge: [{ key: change.key, baseValue: change.after, value: change.before }] }
-        : { academicLinks: [{ key: change.key, baseValue: change.after, value: change.before }] };
+        : change.field === "academicLink"
+          ? { academicLinks: [{ key: change.key, baseValue: change.after, value: change.before }] }
+          : { recordFields: [{ key: change.key, field: change.field, baseValue: change.after, value: change.before }] };
       return reply(await saveCourseContent(
         stores,
         user,

@@ -1,0 +1,9 @@
+Validierung am 26.11.2026
+
+- node --check course-leader-client.js: BESTANDEN
+- Gezielte Node-Testausführung: 16 Tests, 16 bestanden, 0 fehlgeschlagen
+- Enthalten ist ein Verhaltenstest mit einem aktuellen Datensatz-Eintrag, einer echten Änderung und einem verwaisten recordEdits-Eintrag.
+- Ergebnis des Verhaltenstests: Nur die eine echte Änderung wird gesammelt.
+- Patch-Anwendung: git apply --check BESTANDEN
+
+Hinweis: Ein produktiver Netlify-Deploy und der abschließende Browser-End-to-End-Test können nur im echten Projekt-/Deployment-Kontext erfolgen.
