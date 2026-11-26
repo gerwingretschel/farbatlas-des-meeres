@@ -1,5 +1,6 @@
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
+import { createLazyStores } from "./lib/lazy-stores.mjs";
 import {
   ValidationError,
   applyContentChanges,
@@ -67,6 +68,18 @@ const STORES = Object.freeze({
   MATERIAL_FILES: "farbatlas-material-files-v1",
   MATERIAL_UPLOADS: "farbatlas-material-uploads-v1",
   MATERIAL_AUDIT: "farbatlas-material-audit-v1",
+});
+const STORE_BINDINGS = Object.freeze({
+  datasets: STORES.DATASETS,
+  images: STORES.IMAGES,
+  courseLeaders: STORES.COURSE_LEADERS,
+  audit: STORES.AUDIT,
+  auth: STORES.AUTH,
+  imageBackups: STORES.IMAGE_BACKUPS,
+  materialManifests: STORES.MATERIAL_MANIFESTS,
+  materialFiles: STORES.MATERIAL_FILES,
+  materialUploads: STORES.MATERIAL_UPLOADS,
+  materialAudit: STORES.MATERIAL_AUDIT,
 });
 const SESSION_MS = 8 * 60 * 60 * 1000;
 
@@ -635,21 +648,9 @@ function errorReply(error) {
 export default async (req) => {
   if (req.method !== "POST") return reply({ error: "Methode nicht erlaubt." }, 405);
 
-  const stores = {
-    datasets: getStore(STORES.DATASETS),
-    images: getStore(STORES.IMAGES),
-    courseLeaders: getStore(STORES.COURSE_LEADERS),
-    audit: getStore(STORES.AUDIT),
-    auth: getStore(STORES.AUTH),
-    imageBackups: getStore(STORES.IMAGE_BACKUPS),
-    materialManifests: getStore(STORES.MATERIAL_MANIFESTS),
-    materialFiles: getStore(STORES.MATERIAL_FILES),
-    materialUploads: getStore(STORES.MATERIAL_UPLOADS),
-    materialAudit: getStore(STORES.MATERIAL_AUDIT),
-  };
-
   try {
     const body = await req.json();
+    const stores = createLazyStores(STORE_BINDINGS, getStore);
 
     if (body.action === "admin-login") {
       if (!process.env.ADMIN_PASSWORD) throw new ValidationError("ADMIN_PASSWORD fehlt in Netlify.", 500);
