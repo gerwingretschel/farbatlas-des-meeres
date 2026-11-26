@@ -24,6 +24,7 @@
   let currentFolderId = null;
   let datasetPassword = '';
   let loading = false;
+  const expandedFolderIds = new Set();
 
   function activeToken() {
     return sessionStorage.getItem('farbatlasCourseTokenV1')
@@ -150,10 +151,32 @@
       .sort((a, b) => (a.type === b.type ? a.title.localeCompare(b.title, 'de') : a.type === 'folder' ? -1 : 1));
   }
 
+  function expandFolderPath(folderId, includeSelf = true) {
+    if (!folderId || !manifest) return;
+    const byId = new Map(manifest.nodes.map((node) => [node.id, node]));
+    let folder = byId.get(folderId);
+    if (!includeSelf) folder = folder?.parentId ? byId.get(folder.parentId) : null;
+    const visited = new Set();
+    while (folder?.type === 'folder' && !visited.has(folder.id)) {
+      expandedFolderIds.add(folder.id);
+      visited.add(folder.id);
+      folder = folder.parentId ? byId.get(folder.parentId) : null;
+    }
+  }
+
   function folderTree(parentId = null, depth = 0) {
-    return children(parentId).filter((node) => node.type === 'folder').map((folder) => `
-      <li><button class="material-tree-folder ${folder.id === currentFolderId ? 'active' : ''}" data-material-folder="${folder.id}" style="--depth:${depth}">📁 ${escapeHtml(folder.title)}</button>
-      ${folderTree(folder.id, depth + 1)}</li>`).join('');
+    return children(parentId).filter((node) => node.type === 'folder').map((folder) => {
+      const childFolders = children(folder.id).filter((node) => node.type === 'folder');
+      const hasChildren = childFolders.length > 0;
+      const isExpanded = hasChildren && expandedFolderIds.has(folder.id);
+      const toggle = hasChildren
+        ? `<button class="material-tree-toggle" data-material-toggle="${folder.id}" aria-expanded="${isExpanded}" aria-label="Ordner ${escapeHtml(folder.title)} ${isExpanded ? 'einklappen' : 'ausklappen'}">${isExpanded ? '▾' : '▸'}</button>`
+        : '<span class="material-tree-spacer" aria-hidden="true"></span>';
+      return `<li class="material-tree-item">
+        <div class="material-tree-row" style="--depth:${depth}">${toggle}<button class="material-tree-folder ${folder.id === currentFolderId ? 'active' : ''}" data-material-folder="${folder.id}">📁 ${escapeHtml(folder.title)}</button></div>
+        ${isExpanded ? `<ul class="material-tree-children">${folderTree(folder.id, depth + 1)}</ul>` : ''}
+      </li>`;
+    }).join('');
   }
 
   function breadcrumbNodes() {
@@ -178,8 +201,11 @@
 
   function renderLibrary() {
     if (!manifest || !q('#materialsContent')) return;
+    const validFolderIds = new Set(folders().map((folder) => folder.id));
+    for (const id of expandedFolderIds) if (!validFolderIds.has(id)) expandedFolderIds.delete(id);
+    expandFolderPath(currentFolderId, false);
     const items = children(currentFolderId);
-    q('#materialsTree').innerHTML = `<ul><li><button class="material-tree-folder ${currentFolderId ? '' : 'active'}" data-material-folder="">📚 Lernmaterialien</button>${folderTree()}</li></ul>`;
+    q('#materialsTree').innerHTML = `<ul><li class="material-tree-root"><div class="material-tree-row root"><span class="material-tree-spacer" aria-hidden="true"></span><button class="material-tree-folder ${currentFolderId ? '' : 'active'}" data-material-folder="">📚 Lernmaterialien</button></div><ul class="material-tree-children root-children">${folderTree()}</ul></li></ul>`;
     q('#materialsBreadcrumbs').innerHTML = `<button data-material-folder="">Lernmaterialien</button>${breadcrumbNodes().map((folder) => ` › <button data-material-folder="${folder.id}">${escapeHtml(folder.title)}</button>`).join('')}`;
     q('#materialsContent').innerHTML = items.length ? items.map((node) => node.type === 'folder' ? `
       <article class="material-row folder"><button class="material-main" data-material-folder="${node.id}"><span class="material-icon">📁</span><span><strong>${escapeHtml(node.title)}</strong><small>Ordner</small></span></button>${managementButtons(node)}</article>` : `
@@ -187,6 +213,13 @@
     q('#materialsManagement').classList.toggle('hidden', !canManage());
     document.querySelectorAll('[data-material-folder]').forEach((button) => button.onclick = () => {
       currentFolderId = button.dataset.materialFolder || null;
+      expandFolderPath(currentFolderId);
+      renderLibrary();
+    });
+    document.querySelectorAll('[data-material-toggle]').forEach((button) => button.onclick = () => {
+      const id = button.dataset.materialToggle;
+      if (expandedFolderIds.has(id)) expandedFolderIds.delete(id);
+      else expandedFolderIds.add(id);
       renderLibrary();
     });
     document.querySelectorAll('[data-material-open]').forEach((button) => button.onclick = () => openPdf(button.dataset.materialOpen));
@@ -273,6 +306,7 @@
     try {
       const result = await request('material-create-folder', { name: datasetName(), parentId: currentFolderId, title: title.trim(), expectedVersion: manifest.version });
       manifest = result.manifest;
+      if (currentFolderId) expandedFolderIds.add(currentFolderId);
       await dbPut(MANIFEST_STORE, manifestCacheKey(), manifest).catch(() => {});
       renderLibrary();
       status(result.message, 'success');

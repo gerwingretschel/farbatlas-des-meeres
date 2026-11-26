@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 
 const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 const server = read('netlify/functions/farbatlas.mjs');
@@ -56,6 +57,45 @@ test('client implements 5 MB warning, 50 MB maximum and chunked upload', () => {
   assert.match(client, /material-upload-start/);
   assert.match(client, /material-upload-chunk/);
   assert.match(client, /material-upload-finish/);
+});
+
+test('folder tree renders real nested lists with expandable hierarchy', () => {
+  assert.match(client, /expandedFolderIds = new Set\(\)/);
+  assert.match(client, /data-material-toggle/);
+  assert.match(client, /aria-expanded=/);
+  assert.match(client, /<ul class="material-tree-children">\$\{folderTree\(folder\.id, depth \+ 1\)\}<\/ul>/);
+  assert.match(client, /expandFolderPath\(currentFolderId, false\)/);
+  assert.match(client, /if \(currentFolderId\) expandedFolderIds\.add\(currentFolderId\)/);
+  assert.doesNotMatch(client, /\$\{folderTree\(folder\.id, depth \+ 1\)\}<\/li>/);
+
+  const testableClient = client.replace(
+    'window.FarbatlasLearningMaterials = Object.freeze({ open: openLibrary, reload: loadManifest, prepareOffline: prepareMaterialsOffline });',
+    'window.__materialTreeTest = { folderTree, expandedFolderIds, expandFolderPath, setManifest(value) { manifest = value; } };',
+  );
+  const sandbox = {
+    window: {},
+    document: { readyState: 'loading', addEventListener() {}, querySelector() { return null; } },
+    sessionStorage: { getItem() { return ''; } },
+    localStorage: { getItem() { return ''; } },
+    console,
+  };
+  vm.runInNewContext(testableClient, sandbox);
+  const tree = sandbox.window.__materialTreeTest;
+  tree.setManifest({ nodes: [
+    { id: 'test', type: 'folder', title: 'Test', parentId: null },
+    { id: 'test1', type: 'folder', title: 'Test1', parentId: 'test' },
+    { id: 'test2', type: 'folder', title: 'Test2', parentId: 'test' },
+    { id: 'deep', type: 'folder', title: 'Deep', parentId: 'test1' },
+  ] });
+  tree.expandFolderPath('test1');
+  const expandedMarkup = tree.folderTree();
+  assert.match(expandedMarkup, /aria-expanded="true"[^>]*>▾<\/button>/);
+  assert.match(expandedMarkup, /📁 Test<\/button>[\s\S]*<ul class="material-tree-children">[\s\S]*📁 Test1[\s\S]*📁 Deep[\s\S]*📁 Test2/);
+
+  tree.expandedFolderIds.delete('test');
+  const collapsedMarkup = tree.folderTree();
+  assert.match(collapsedMarkup, /aria-expanded="false"[^>]*>▸<\/button>/);
+  assert.doesNotMatch(collapsedMarkup, /📁 Test1|📁 Test2|📁 Deep/);
 });
 
 test('offline preparation is separate from image preparation and persists PDFs in IndexedDB', () => {
