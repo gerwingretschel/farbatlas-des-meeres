@@ -1,11 +1,16 @@
 /* Farbatlas: kleine App-Grundlage für vorbereitete Offline-Bibliotheken */
-const CACHE = 'farbatlas-app-shell-v12-import-sync-merged';
+const CACHE = 'farbatlas-app-shell-v13-learning-materials';
 const SHELL = [
   '/',
   '/index.html',
   '/v10-client.js',
   '/course-leader-client.js',
   '/image-compression-client.js',
+  '/learning-materials-viewer.js',
+  '/learning-materials-client.js',
+  '/learning-materials.css',
+  '/vendor/pdfjs/pdf.mjs',
+  '/vendor/pdfjs/pdf.worker.mjs',
 ];
 
 self.addEventListener('install', (event) => {
@@ -39,7 +44,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  const isApplicationCode = ['/v10-client.js', '/course-leader-client.js', '/image-compression-client.js', '/farbatlas-sw.js'].includes(url.pathname);
+  const isApplicationCode = ['/v10-client.js', '/course-leader-client.js', '/image-compression-client.js', '/learning-materials-viewer.js', '/learning-materials-client.js', '/learning-materials.css', '/vendor/pdfjs/pdf.mjs', '/vendor/pdfjs/pdf.worker.mjs', '/farbatlas-sw.js'].includes(url.pathname);
   if (isApplicationCode) {
     event.respondWith(
       fetch(request, { cache: 'no-store' }).then((response) => {

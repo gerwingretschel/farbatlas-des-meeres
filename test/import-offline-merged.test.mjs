@@ -91,7 +91,7 @@ test('v4 image-pair pipeline and v5 offline synchronization coexist in one runti
 });
 
 test('application scripts are network-first so a deploy cannot keep stale v4/v5 code mixed', () => {
-  assert.match(worker, /farbatlas-app-shell-v12-import-sync-merged/);
+  assert.match(worker, /farbatlas-app-shell-v13-learning-materials/);
   assert.match(worker, /isApplicationCode/);
   assert.match(worker, /fetch\(request, \{ cache: 'no-store' \}\)/);
   const networkFirst = worker.slice(worker.indexOf('if (isApplicationCode)'), worker.indexOf("event.respondWith(caches.match", worker.indexOf('if (isApplicationCode)')));

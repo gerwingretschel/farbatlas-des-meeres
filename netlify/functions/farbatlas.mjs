@@ -31,6 +31,30 @@ import {
   thumbnailKeyFor,
   validateImageVariant,
 } from "./lib/thumbnail-utils.mjs";
+import {
+  MATERIAL_RULES,
+  assertExpectedVersion,
+  assertFolder,
+  cleanMaterialTitle,
+  cleanPdfFileName,
+  cleanSha256,
+  createFolderNode,
+  createPdfNode,
+  emptyMaterialManifest,
+  expectedChunks,
+  finalizeManifest,
+  materialFileKey,
+  materialManifestKey,
+  materialUploadChunkKey,
+  materialUploadMetaKey,
+  moveNode,
+  publicMaterialManifest,
+  removeNodes,
+  renameNode,
+  validateMaterialId,
+  validatePdfHeader,
+  validateUploadId,
+} from "./lib/material-utils.mjs";
 
 const STORES = Object.freeze({
   DATASETS: "farbatlas-datasets-v10",
@@ -39,6 +63,10 @@ const STORES = Object.freeze({
   AUDIT: "farbatlas-course-audit-v1",
   AUTH: "farbatlas-auth-throttle-v1",
   IMAGE_BACKUPS: "farbatlas-image-backups-v1",
+  MATERIAL_MANIFESTS: "farbatlas-material-manifests-v1",
+  MATERIAL_FILES: "farbatlas-material-files-v1",
+  MATERIAL_UPLOADS: "farbatlas-material-uploads-v1",
+  MATERIAL_AUDIT: "farbatlas-material-audit-v1",
 });
 const SESSION_MS = 8 * 60 * 60 * 1000;
 
@@ -254,6 +282,37 @@ async function getDatasetEntry(store, name) {
 async function authenticateDataset(req, stores, body) {
   const claims = readToken(req);
   if (claims?.role === "courseLeader") {
+
+    if (body.action === "material-list") {
+      const { entry } = await authenticateMaterialRead(req, stores, body);
+      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
+      return reply({ manifest: publicMaterialManifest(manifestEntry.data) });
+    }
+    if (body.action === "material-download-chunk") {
+      const { entry } = await authenticateMaterialRead(req, stores, body);
+      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, entry.data.name);
+      const materialId = validateMaterialId(body.materialId);
+      const node = manifestEntry.data.nodes.find((candidate) => candidate.id === materialId && candidate.type === "pdf");
+      if (!node) throw new ValidationError("PDF wurde nicht gefunden.", 404);
+      const index = Number(body.chunkIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= Number(node.chunkCount)) {
+        throw new ValidationError("Ungültiger PDF-Abschnitt.");
+      }
+      const bytes = await stores.materialFiles.get(materialFileKey(materialId, index), { type: "arrayBuffer" });
+      if (!bytes) throw new ValidationError("PDF-Abschnitt wurde nicht gefunden.", 404);
+      const metadata = await stores.materialFiles.getMetadata(materialFileKey(materialId, index));
+      if (metadata?.metadata?.dataset !== datasetKey(entry.data.name)) {
+        throw new ValidationError("PDF gehört nicht zu diesem Datensatz.", 403);
+      }
+      return reply({
+        materialId,
+        chunkIndex: index,
+        chunkCount: node.chunkCount,
+        data: Buffer.from(bytes).toString("base64"),
+        type: "application/pdf",
+      });
+    }
+
     const actor = await principal(req, stores.courseLeaders);
     assertAssigned(actor.user, body.name);
     const entry = await getDatasetEntry(stores.datasets, body.name);
@@ -301,6 +360,116 @@ async function listAllBlobs(store, prefix, maximum = 500) {
     cursor = page.nextCursor;
   } while (cursor && blobs.length < maximum);
   return blobs.slice(0, maximum);
+}
+
+
+async function authenticateMaterialRead(req, stores, body) {
+  const name = normalizeName(body.name);
+  if (!name) throw new ValidationError("Datensatzname fehlt.");
+  const claims = readToken(req);
+  if (claims?.role === "admin") {
+    const entry = await getDatasetEntry(stores.datasets, name);
+    if (!entry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+    return { entry, actor: { role: "admin", username: "admin", displayName: "Administrator" } };
+  }
+  if (claims?.role === "courseLeader") {
+    const actor = await principal(req, stores.courseLeaders);
+    assertAssigned(actor.user, name);
+    const entry = await getDatasetEntry(stores.datasets, name);
+    if (!entry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+    return { entry, actor: materialActor(actor) };
+  }
+  const result = await authenticateDataset(req, stores, { ...body, name });
+  return { entry: result.entry, actor: null };
+}
+
+function materialActor(actor) {
+  if (actor?.role === "admin") return { role: "admin", username: "admin", displayName: "Administrator" };
+  const user = actor?.user;
+  return { role: "courseLeader", username: user?.username || "", displayName: user?.displayName || user?.username || "Kursleiter" };
+}
+
+function assertCanManageMaterials(actor, name) {
+  if (actor.role === "admin") return materialActor(actor);
+  const user = requireCourseLeader(actor);
+  assertAssigned(user, name);
+  return materialActor(actor);
+}
+
+async function getMaterialManifestEntry(store, name) {
+  const key = materialManifestKey(name);
+  const entry = await store.getWithMetadata(key, { type: "json", consistency: "strong" });
+  return entry || { data: emptyMaterialManifest(name), etag: null, missing: true };
+}
+
+async function mutateMaterialManifest(store, name, expectedVersion, mutator) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const entry = await getMaterialManifestEntry(store, name);
+    const manifest = structuredClone(entry.data);
+    assertExpectedVersion(manifest, expectedVersion);
+    const result = await mutator(manifest);
+    finalizeManifest(manifest);
+    const saved = await store.setJSON(
+      materialManifestKey(name),
+      manifest,
+      entry.missing ? { onlyIfNew: true } : { onlyIfMatch: entry.etag }
+    );
+    if (saved.modified) return { manifest, result, etag: saved.etag };
+  }
+  throw new ValidationError("Das Materialverzeichnis wurde gleichzeitig geändert. Bitte neu laden.", 409);
+}
+
+async function writeMaterialAudit(store, name, actor, action, details = {}) {
+  const key = `material-audit-${datasetKey(name)}-${Date.now()}-${crypto.randomUUID()}`;
+  await store.setJSON(key, {
+    at: new Date().toISOString(),
+    dataset: normalizeName(name),
+    actor,
+    action,
+    details,
+  }, { onlyIfNew: true });
+}
+
+async function deletePdfChunks(store, node) {
+  if (!node || node.type !== "pdf") return 0;
+  let deleted = 0;
+  for (let index = 0; index < Number(node.chunkCount || 0); index += 1) {
+    await store.delete(materialFileKey(node.id, index)).catch(() => {});
+    deleted += 1;
+  }
+  return deleted;
+}
+
+async function clearUpload(store, meta) {
+  if (!meta) return;
+  for (let index = 0; index < Number(meta.chunkCount || 0); index += 1) {
+    await store.delete(materialUploadChunkKey(meta.uploadId, index)).catch(() => {});
+  }
+  await store.delete(materialUploadMetaKey(meta.uploadId)).catch(() => {});
+}
+
+async function deleteDatasetMaterials(stores, name) {
+  const wanted = datasetKey(name);
+  let deletedFiles = 0;
+  let deletedUploads = 0;
+  const files = await listAllBlobs(stores.materialFiles, "pdf-", 10000);
+  for (const blob of files) {
+    const envelope = await stores.materialFiles.getMetadata(blob.key);
+    if (envelope?.metadata?.dataset !== wanted) continue;
+    await stores.materialFiles.delete(blob.key);
+    deletedFiles += 1;
+  }
+  const uploads = await listAllBlobs(stores.materialUploads, "upload-", 10000);
+  for (const blob of uploads) {
+    const envelope = await stores.materialUploads.getMetadata(blob.key);
+    if (envelope?.metadata?.dataset !== wanted) continue;
+    await stores.materialUploads.delete(blob.key);
+    deletedUploads += 1;
+  }
+  await stores.materialManifests.delete(materialManifestKey(name)).catch(() => {});
+  const audit = await listAllBlobs(stores.materialAudit, `material-audit-${wanted}-`, 5000);
+  for (const blob of audit) await stores.materialAudit.delete(blob.key).catch(() => {});
+  return { deletedMaterialChunks: deletedFiles, deletedMaterialUploads: deletedUploads, deletedMaterialAudit: audit.length };
 }
 
 async function getCompressionRun(store, runId) {
@@ -502,6 +671,10 @@ export default async (req) => {
     audit: getStore(STORES.AUDIT),
     auth: getStore(STORES.AUTH),
     imageBackups: getStore(STORES.IMAGE_BACKUPS),
+    materialManifests: getStore(STORES.MATERIAL_MANIFESTS),
+    materialFiles: getStore(STORES.MATERIAL_FILES),
+    materialUploads: getStore(STORES.MATERIAL_UPLOADS),
+    materialAudit: getStore(STORES.MATERIAL_AUDIT),
   };
 
   try {
@@ -554,6 +727,156 @@ export default async (req) => {
     }
 
     const actor = await principal(req, stores.courseLeaders);
+
+
+    if (body.action === "material-upload-start") {
+      const name = normalizeName(body.name);
+      const actorInfo = assertCanManageMaterials(actor, name);
+      const datasetEntry = await getDatasetEntry(stores.datasets, name);
+      if (!datasetEntry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+      const manifestEntry = await getMaterialManifestEntry(stores.materialManifests, name);
+      assertExpectedVersion(manifestEntry.data, body.expectedVersion);
+      assertFolder(manifestEntry.data, body.parentId);
+      const bytes = Number(body.bytes);
+      const chunkCount = expectedChunks(bytes);
+      const uploadId = `upload-${crypto.randomUUID()}`;
+      const materialId = `material-${crypto.randomUUID()}`;
+      const meta = {
+        uploadId,
+        materialId,
+        dataset: normalizeName(name),
+        datasetKey: datasetKey(name),
+        parentId: body.parentId || null,
+        title: cleanMaterialTitle(body.title, body.fileName),
+        fileName: cleanPdfFileName(body.fileName),
+        bytes,
+        pageCount: Math.max(0, Number(body.pageCount || 0)),
+        sha256: cleanSha256(body.sha256),
+        chunkSize: MATERIAL_RULES.chunkBytes,
+        chunkCount,
+        expectedVersion: Number(manifestEntry.data.version || 0),
+        actor: actorInfo,
+        createdAt: new Date().toISOString(),
+      };
+      const stored = await stores.materialUploads.setJSON(materialUploadMetaKey(uploadId), meta, {
+        onlyIfNew: true,
+        metadata: { dataset: meta.datasetKey, kind: "upload-meta" },
+      });
+      if (!stored.modified) throw new ValidationError("Upload konnte nicht vorbereitet werden.", 409);
+      return reply({
+        uploadId,
+        materialId,
+        chunkSize: meta.chunkSize,
+        chunkCount,
+        warning: bytes > MATERIAL_RULES.warningBytes,
+        maximumBytes: MATERIAL_RULES.maximumBytes,
+      });
+    }
+    if (body.action === "material-upload-chunk") {
+      const name = normalizeName(body.name);
+      assertCanManageMaterials(actor, name);
+      const uploadId = validateUploadId(body.uploadId);
+      const meta = await stores.materialUploads.get(materialUploadMetaKey(uploadId), { type: "json", consistency: "strong" });
+      if (!meta || meta.datasetKey !== datasetKey(name)) throw new ValidationError("Upload wurde nicht gefunden.", 404);
+      const index = Number(body.chunkIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= meta.chunkCount) throw new ValidationError("Ungültiger Upload-Abschnitt.");
+      const bytes = Buffer.from(String(body.data || ""), "base64");
+      const expectedSize = index === meta.chunkCount - 1 ? meta.bytes - (index * meta.chunkSize) : meta.chunkSize;
+      if (bytes.length !== expectedSize) throw new ValidationError("Upload-Abschnitt besitzt eine falsche Größe.");
+      if (index === 0) validatePdfHeader(bytes);
+      await stores.materialUploads.set(materialUploadChunkKey(uploadId, index), bytes, {
+        metadata: { dataset: meta.datasetKey, uploadId, chunkIndex: index, bytes: bytes.length, kind: "upload-chunk" },
+      });
+      return reply({ uploaded: index + 1, chunkCount: meta.chunkCount });
+    }
+    if (body.action === "material-upload-finish") {
+      const name = normalizeName(body.name);
+      const actorInfo = assertCanManageMaterials(actor, name);
+      const uploadId = validateUploadId(body.uploadId);
+      const meta = await stores.materialUploads.get(materialUploadMetaKey(uploadId), { type: "json", consistency: "strong" });
+      if (!meta || meta.datasetKey !== datasetKey(name)) throw new ValidationError("Upload wurde nicht gefunden.", 404);
+      const hash = crypto.createHash("sha256");
+      let total = 0;
+      const chunks = [];
+      for (let index = 0; index < meta.chunkCount; index += 1) {
+        const value = await stores.materialUploads.get(materialUploadChunkKey(uploadId, index), { type: "arrayBuffer" });
+        if (!value) throw new ValidationError(`Upload ist unvollständig: Abschnitt ${index + 1} fehlt.`, 409);
+        const bytes = Buffer.from(value);
+        if (index === 0) validatePdfHeader(bytes);
+        hash.update(bytes);
+        total += bytes.length;
+        chunks.push(bytes);
+      }
+      if (total !== meta.bytes || hash.digest("hex") !== meta.sha256) {
+        throw new ValidationError("PDF-Prüfsumme oder Gesamtgröße stimmt nicht. Upload wurde nicht veröffentlicht.", 409);
+      }
+      for (let index = 0; index < chunks.length; index += 1) {
+        await stores.materialFiles.set(materialFileKey(meta.materialId, index), chunks[index], {
+          metadata: {
+            dataset: meta.datasetKey,
+            materialId: meta.materialId,
+            chunkIndex: index,
+            chunkCount: meta.chunkCount,
+            bytes: chunks[index].length,
+            contentType: "application/pdf",
+            sha256: meta.sha256,
+          },
+        });
+      }
+      let saved;
+      try {
+        saved = await mutateMaterialManifest(stores.materialManifests, name, meta.expectedVersion, async (manifest) => {
+          assertFolder(manifest, meta.parentId);
+          const node = createPdfNode({ ...meta, actor: actorInfo });
+          manifest.nodes.push(node);
+          return node;
+        });
+      } catch (error) {
+        for (let index = 0; index < meta.chunkCount; index += 1) {
+          await stores.materialFiles.delete(materialFileKey(meta.materialId, index)).catch(() => {});
+        }
+        throw error;
+      }
+      await clearUpload(stores.materialUploads, meta);
+      await writeMaterialAudit(stores.materialAudit, name, actorInfo, "upload", {
+        materialId: meta.materialId, fileName: meta.fileName, bytes: meta.bytes, parentId: meta.parentId,
+      }).catch((error) => console.error("MATERIAL_AUDIT_WRITE_FAILED", error));
+      return reply({ manifest: publicMaterialManifest(saved.manifest), material: saved.result, message: "PDF wurde veröffentlicht." });
+    }
+    if (body.action === "material-create-folder") {
+      const name = normalizeName(body.name);
+      const actorInfo = assertCanManageMaterials(actor, name);
+      const saved = await mutateMaterialManifest(stores.materialManifests, name, body.expectedVersion, async (manifest) => {
+        const node = createFolderNode(manifest, { parentId: body.parentId, title: body.title, actor: actorInfo });
+        manifest.nodes.push(node);
+        return node;
+      });
+      await writeMaterialAudit(stores.materialAudit, name, actorInfo, "create-folder", { id: saved.result.id, title: saved.result.title, parentId: saved.result.parentId }).catch(() => {});
+      return reply({ manifest: publicMaterialManifest(saved.manifest), message: "Ordner wurde angelegt." });
+    }
+    if (body.action === "material-rename") {
+      const name = normalizeName(body.name);
+      const actorInfo = assertCanManageMaterials(actor, name);
+      const saved = await mutateMaterialManifest(stores.materialManifests, name, body.expectedVersion, async (manifest) => renameNode(manifest, body.id, body.title));
+      await writeMaterialAudit(stores.materialAudit, name, actorInfo, "rename", { id: saved.result.id, title: saved.result.title }).catch(() => {});
+      return reply({ manifest: publicMaterialManifest(saved.manifest), message: "Eintrag wurde umbenannt." });
+    }
+    if (body.action === "material-move") {
+      const name = normalizeName(body.name);
+      const actorInfo = assertCanManageMaterials(actor, name);
+      const saved = await mutateMaterialManifest(stores.materialManifests, name, body.expectedVersion, async (manifest) => moveNode(manifest, body.id, body.parentId));
+      await writeMaterialAudit(stores.materialAudit, name, actorInfo, "move", { id: saved.result.id, parentId: saved.result.parentId }).catch(() => {});
+      return reply({ manifest: publicMaterialManifest(saved.manifest), message: "Eintrag wurde verschoben." });
+    }
+    if (body.action === "material-delete") {
+      const name = normalizeName(body.name);
+      const actorInfo = assertCanManageMaterials(actor, name);
+      const saved = await mutateMaterialManifest(stores.materialManifests, name, body.expectedVersion, async (manifest) => removeNodes(manifest, body.id));
+      let deletedChunks = 0;
+      for (const node of saved.result) deletedChunks += await deletePdfChunks(stores.materialFiles, node);
+      await writeMaterialAudit(stores.materialAudit, name, actorInfo, "delete", { ids: saved.result.map((node) => node.id), deletedChunks }).catch(() => {});
+      return reply({ manifest: publicMaterialManifest(saved.manifest), message: "Eintrag wurde gelöscht.", deletedChunks });
+    }
 
     if (body.action === "course-session") {
       return reply({ profile: publicCourseLeader(requireCourseLeader(actor)) });
@@ -888,8 +1211,9 @@ export default async (req) => {
       });
       if (!existing) throw new ValidationError("Datensatz nicht gefunden.", 404);
       const deletedImages = await deleteDatasetImages(stores.images, name);
+      const materialCleanup = await deleteDatasetMaterials(stores, name);
       await stores.datasets.delete(datasetKey(name));
-      return reply({ message: `Datensatz „${existing.name || name}“ wurde gelöscht.`, deletedImages });
+      return reply({ message: `Datensatz „${existing.name || name}“ wurde gelöscht.`, deletedImages, ...materialCleanup });
     }
     if (body.action === "reset-dataset-password") {
       const name = normalizeName(body.name);

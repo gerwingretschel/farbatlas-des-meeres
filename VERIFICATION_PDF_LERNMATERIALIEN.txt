@@ -1,0 +1,37 @@
+FARBATLAS PDF-LERNMATERIALIEN – VERIFIKATION
+Stand: 2026-11-26
+
+Grundlage
+- Farbatlas_des_Meeres_Audit_2026-11-26_164819.txt
+- Referenzstand nach Merge von PR #4
+
+Automatische Prüfung
+- Gesamte Node-Test-Suite: 74 von 74 Tests bestanden
+- JavaScript-Syntaxprüfung aller bestehenden und neuen Anwendungsskripte: bestanden
+- Syntaxprüfung der lokal eingebundenen PDF.js-Dateien: bestanden
+- Build mit inject-v10.mjs: bestanden
+- Einbindung von learning-materials.css, learning-materials-viewer.js und learning-materials-client.js: bestätigt
+- Service-Worker-App-Shell einschließlich PDF.js und Materialdateien: bestätigt
+- Patch-Anwendung mit git apply --check: bestanden
+
+Gezielt geprüft
+- datensatzbezogener Materialbaum
+- gültige und ungültige PDF-Kennung
+- 5-MB-Warnschwelle und 50-MB-Maximum
+- Upload in Abschnitten
+- SHA-256-Integritätsprüfung
+- KL-/Admin-Autorisierung
+- rekursives Löschen und Schutz vor Ordnerzyklen
+- Versionskonfliktschutz des Materialverzeichnisses
+- Lazy Loading und Datensparabfrage
+- Offline-Speicherung in separater IndexedDB
+- Viewerfunktionen: Zoom, Touch-Pinch, Vollbild, Doppelseite, Miniaturen, Querformat
+- Löschbereinigung beim Entfernen eines Datensatzes
+- keine Änderung an collectCourseChanges, captureBaseline oder datasetRecordKeys
+
+Noch manuell in der Netlify Deploy Preview zu prüfen
+- echter Upload gegen Netlify Blobs
+- PDF-Rendering in Safari/iOS, Chrome/Android und einem Desktop-Browser
+- Gerätewechsel Hochformat/Querformat
+- Offline-Test im Flugmodus
+- produktive Speicherquote bei mehreren großen PDFs
