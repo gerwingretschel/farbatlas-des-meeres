@@ -14,6 +14,7 @@
   const OFFLINE_DB = 'farbatlas-offline-library-v1';
   const OFFLINE_STORE = 'assets';
   const MANIFEST_STORE = 'manifests';
+  const SYNC_STORE = 'pending-sync';
   const THUMBNAIL_PREFETCH_NEXT = 5;
   const THUMBNAIL_PREFETCH_PREVIOUS = 2;
   const PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
@@ -29,42 +30,71 @@
     if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
     return `${(value / 1024 / 1024).toFixed(1)} MB`;
   };
-  const session = { name: '', password: '', payload: null };
+  const session = { name: '', password: '', payload: null, versionTag: '' };
   const memoryUrls = new Map();
   const inflight = new Map();
   const observedImages = new WeakSet();
   let galleryGeneration = 0;
   let thumbnailPrefetchGeneration = 0;
   let importPreparation = null;
+  let pendingSync = null;
   let dataSaver = typeof localStorage !== 'undefined' && localStorage.getItem(DATA_SAVER_KEY) === '1';
 
   function activeToken() {
     return sessionStorage.getItem('farbatlasAdminTokenV09') || (typeof adminToken === 'undefined' ? '' : String(adminToken || ''));
   }
 
+  function serverResponseProblem(response, text) {
+    const contentType = String(response?.headers?.get?.('content-type') || '').toLowerCase();
+    const looksLikeHtml = /<!doctype\s+html|<html|login redirect|please enable javascript/i.test(String(text || '')) || contentType.includes('text/html') || response?.redirected;
+    return looksLikeHtml
+      ? { code: 'ACCESS_REDIRECT', message: 'Der Serverzugang ist derzeit nicht verfügbar oder verlangt eine erneute Anmeldung. Deine Änderungen bleiben auf diesem Gerät gespeichert und sind noch nicht synchronisiert.' }
+      : { code: 'INVALID_SERVER_RESPONSE', message: 'Der Server hat keine gültige Antwort gesendet. Deine Änderungen bleiben auf diesem Gerät gespeichert und sind noch nicht synchronisiert.' };
+  }
+
   async function api(action, data = {}) {
     const token = activeToken();
-    const response = await fetch('/api/farbatlas', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(token ? { authorization: `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify({ action, ...data })
-    });
+    let response;
+    try {
+      response = await fetch('/api/farbatlas', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ action, ...data })
+      });
+    } catch {
+      const error = new Error('Der Server ist derzeit nicht erreichbar. Deine Änderungen bleiben auf diesem Gerät gespeichert und sind noch nicht synchronisiert.');
+      error.code = 'SERVER_UNREACHABLE';
+      throw error;
+    }
     const text = await response.text();
     let body;
-    try { body = JSON.parse(text); } catch { body = { error: text || `HTTP ${response.status}` }; }
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    try { body = JSON.parse(text); } catch {
+      const problem = serverResponseProblem(response, text);
+      const error = new Error(problem.message);
+      error.code = problem.code;
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.ok) {
+      const error = new Error(body.error || `Serverfehler ${response.status}`);
+      error.code = response.status === 409 ? 'SYNC_CONFLICT' : 'SERVER_ERROR';
+      error.status = response.status;
+      error.details = body;
+      throw error;
+    }
     return body;
   }
 
   function dbOpen() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(OFFLINE_DB, 1);
+      const request = indexedDB.open(OFFLINE_DB, 2);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains(OFFLINE_STORE)) request.result.createObjectStore(OFFLINE_STORE);
         if (!request.result.objectStoreNames.contains(MANIFEST_STORE)) request.result.createObjectStore(MANIFEST_STORE);
+        if (!request.result.objectStoreNames.contains(SYNC_STORE)) request.result.createObjectStore(SYNC_STORE);
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -89,6 +119,18 @@
       await new Promise((resolve, reject) => {
         const transaction = db.transaction(storeName, 'readwrite');
         transaction.objectStore(storeName).put(value, key);
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+      });
+    } finally { db.close(); }
+  }
+
+  async function dbDelete(storeName, key) {
+    const db = await dbOpen();
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, 'readwrite');
+        transaction.objectStore(storeName).delete(key);
         transaction.oncomplete = resolve;
         transaction.onerror = () => reject(transaction.error);
       });
@@ -236,7 +278,8 @@
   }
 
   function importPreparationSummary(items, invalid = 0, failed = 0) {
-    const pending = (Array.isArray(items) ? items : []).filter((item) => item && !item.imageKey && !String(item.name || '').startsWith('dummy_'));
+    const deleted = typeof deletedRecords !== 'undefined' && deletedRecords instanceof Set ? deletedRecords : new Set();
+    const pending = (Array.isArray(items) ? items : []).filter((item) => item && !item.imageKey && !deleted.has(item.name) && !String(item.name || '').startsWith('dummy_'));
     const prepared = pending.filter((item) => {
       try { assertPreparedPair(item); return true; } catch { return false; }
     });
@@ -304,7 +347,7 @@
     importPreparation = (async () => {
       let completedThisRun = 0;
       while (true) {
-        const pending = imported.filter((item) => item && !item.imageKey && !item.preparedImport && !String(item.name || '').startsWith('dummy_'));
+        const pending = imported.filter((item) => item && !item.imageKey && !item.preparedImport && !deletedRecords.has(item.name) && !String(item.name || '').startsWith('dummy_'));
         if (!pending.length) break;
         for (let index = 0; index < pending.length; index += 1) {
           if (statusElement) statusElement.innerHTML = `<b>Bild ${completedThisRun + 1}: Unterrichtsbild bis 1.600 px / 400 KB und Vorschaubild werden erzeugt …</b>`;
@@ -317,6 +360,7 @@
       updatePendingNotice();
       const summary = importPreparationSummary(imported, importState?.invalid, importState?.failed);
       updateImportPreparationDisplay(summary, statusElement);
+      if (summary.prepared) await persistPendingSync('Neue Bilder warten auf die Synchronisierung');
       return summary.prepared;
     })().finally(() => { importPreparation = null; });
     return importPreparation;
@@ -351,9 +395,91 @@
     };
   }
 
+  const syncKey = (name) => String(name || session.name || currentDatasetName || '').trim().toLowerCase();
+
+  function pendingSnapshot(reason = 'Änderungen') {
+    const name = String(session.name || currentDatasetName || q('#saveDatasetName')?.value || '').trim();
+    const baselineDeleted = new Set(session.payload?.deleted || []);
+    const deletionCount = [...deletedRecords].filter((value) => !baselineDeleted.has(value)).length;
+    return {
+      name,
+      reason,
+      baseVersionTag: pendingSync?.baseVersionTag || session.versionTag || '',
+      updatedAt: new Date().toISOString(),
+      imported: Array.isArray(imported) ? imported : [],
+      savedGroups,
+      groupMoves,
+      recordEdits,
+      titleImages,
+      deleted: [...deletedRecords],
+      deletionCount,
+    };
+  }
+
+  async function persistPendingSync(reason = 'Lokale Änderungen') {
+    const snapshot = pendingSnapshot(reason);
+    if (!snapshot.name) return null;
+    pendingSync = snapshot;
+    await dbPut(SYNC_STORE, syncKey(snapshot.name), snapshot);
+    if (typeof scheduleDatasetCache === 'function') scheduleDatasetCache();
+    updatePendingNotice();
+    return snapshot;
+  }
+
+  async function clearPendingSync(name = session.name) {
+    const key = syncKey(name);
+    pendingSync = null;
+    if (key) await dbDelete(SYNC_STORE, key).catch(() => {});
+    updatePendingNotice();
+  }
+
+  async function storedPendingSync(name) {
+    const key = syncKey(name);
+    return key ? dbGet(SYNC_STORE, key).catch(() => null) : null;
+  }
+
+  function applyPendingSnapshot(snapshot) {
+    if (!snapshot) return;
+    pendingSync = snapshot;
+    imported = Array.isArray(snapshot.imported) ? snapshot.imported : [];
+    savedGroups = snapshot.savedGroups || {};
+    groupMoves = snapshot.groupMoves || {};
+    recordEdits = snapshot.recordEdits || {};
+    titleImages = snapshot.titleImages || {};
+    deletedRecords = new Set(snapshot.deleted || []);
+    delete GROUPS.Tiere;
+    delete GROUPS.Pflanzen;
+    Object.entries(savedGroups).forEach(([groupName, data]) => {
+      GROUPS[groupName] = [data.icon || '🔬', data.c1 || '#68c7c2', data.c2 || '#357b8c', data.families || []];
+    });
+    if (typeof rebuild === 'function') rebuild();
+    if (typeof go === 'function') go([], false);
+    updatePendingNotice();
+  }
+
+  function conflictMessage() {
+    return 'Der Datensatz wurde auf dem Server seit deiner letzten geladenen Version verändert. Die lokalen Änderungen wurden nicht überschrieben und bleiben auf diesem Gerät gespeichert. Öffne den aktuellen Serverstand zum Vergleichen, bevor du erneut synchronisierst.';
+  }
+
+  function buildSyncPlan(snapshot, currentVersionTag) {
+    const deleted = new Set(snapshot?.deleted || []);
+    const importedItems = Array.isArray(snapshot?.imported) ? snapshot.imported : [];
+    return {
+      conflict: Boolean(snapshot?.baseVersionTag && currentVersionTag && snapshot.baseVersionTag !== currentVersionTag),
+      uploads: importedItems.filter((item) => item && !item.imageKey && !deleted.has(item.name) && !String(item.name || '').startsWith('dummy_')).map((item) => item.name),
+      retainedUploadedPairs: importedItems.filter((item) => item?.imageKey && item?.thumbnailKey && item?.pendingUpload).map((item) => ({ imageKey: item.imageKey, thumbnailKey: item.thumbnailKey })),
+      deletions: [...deleted],
+    };
+  }
+
+  window.FarbatlasOfflineSync = Object.freeze({
+    plan: buildSyncPlan,
+    classifyResponse: serverResponseProblem,
+  });
+
   async function uploadPending(name, password, status) {
     await preparePendingImports(status);
-    const pending = imported.filter((item) => !item.imageKey && !String(item.name || '').startsWith('dummy_'));
+    const pending = imported.filter((item) => !item.imageKey && !deletedRecords.has(item.name) && !String(item.name || '').startsWith('dummy_'));
     for (let index = 0; index < pending.length; index += 1) {
       const item = pending[index];
       assertPreparedPair(item);
@@ -375,22 +501,24 @@
         throw new Error(`Bildpaar „${item.name}“ wurde nicht eindeutig gespeichert.`);
       }
       Object.assign(item, uploaded, {
-        pendingUpload: false,
+        pendingUpload: true,
         pairId: uploaded.imageKey,
         src: await blobToDataUrl(item.teachingBlob),
         thumbnailSrc: await blobToDataUrl(item.thumbnailBlob),
       });
+      await persistPendingSync('Neue Bilder warten auf die Synchronisierung');
     }
     updatePendingNotice();
     return pending.length;
   }
 
-  function applyPayload(payload, name) {
+  function applyPayload(payload, name, versionTag = '') {
     if (typeof clearSearch === 'function') clearSearch();
     datasetLoaded = true;
     currentDatasetName = String(name || 'Geladener Datensatz');
     session.name = currentDatasetName;
     session.payload = payload;
+    session.versionTag = versionTag || '';
     imported = (payload.images || []).filter((item) => !String(item.name || '').startsWith('dummy_')).map((item) => ({
       ...item,
       src: item.src && !item.imageKey ? item.src : PLACEHOLDER,
@@ -444,21 +572,48 @@
       if (!name || !password) throw new Error('Name und Passwort sind erforderlich.');
       createButton.disabled = saveButton.disabled = true;
       status.style.color = '#173640';
+      session.name = name;
+      session.password = password;
+      await preparePendingImports(status);
+      await persistPendingSync(create ? 'Neuer Datensatz wartet auf Synchronisierung' : 'Lokale Änderungen warten auf Synchronisierung');
+      if (!navigator.onLine) {
+        status.textContent = 'Keine Internetverbindung. Neue Bilder und Löschungen bleiben auf diesem Gerät gespeichert. Synchronisiere sie, sobald die Verbindung wieder verfügbar ist.';
+        status.style.color = '#a65b16';
+        return;
+      }
       if (create) {
         status.textContent = 'Datensatz wird angelegt …';
         await api('save', { name, password, payload: { ...meta(), images: [] }, create: true });
+        session.versionTag = '';
+      } else {
+        status.textContent = 'Serverstand wird vor der Synchronisierung geprüft …';
+        const current = await api('load', { name, password });
+        const expected = pendingSync?.baseVersionTag || session.versionTag || '';
+        if (expected && current.versionTag !== expected) {
+          const error = new Error(conflictMessage());
+          error.code = 'SYNC_CONFLICT';
+          throw error;
+        }
       }
-      session.name = name;
-      session.password = password;
       const uploaded = await uploadPending(name, password, status);
       status.textContent = 'Datensatz wird abgeschlossen …';
-      const result = await api('save', { name, password, payload: meta(), create: false });
+      const result = await api('save', {
+        name,
+        password,
+        payload: meta(),
+        create: false,
+        expectedVersionTag: create ? undefined : (pendingSync?.baseVersionTag || session.versionTag || ''),
+      });
+      session.versionTag = result.versionTag || session.versionTag;
+      imported.forEach((item) => { if (item?.imageKey) item.pendingUpload = false; });
+      await clearPendingSync(name);
       publishDatasetContext(name, true);
       status.textContent = `${uploaded ? `${uploaded} Bildpaare wurden gespeichert. ` : ''}${result.message}`;
       status.style.color = '#16885a';
     } catch (error) {
-      status.textContent = error.message;
-      status.style.color = '#c44545';
+      await persistPendingSync(error.code === 'SYNC_CONFLICT' ? 'Synchronisationskonflikt' : 'Synchronisierung fehlgeschlagen').catch(() => {});
+      status.textContent = error.code === 'SYNC_CONFLICT' ? conflictMessage() : error.message;
+      status.style.color = error.code === 'SYNC_CONFLICT' ? '#a65b16' : '#c44545';
     } finally {
       createButton.disabled = saveButton.disabled = false;
     }
@@ -473,8 +628,19 @@
       const result = await api('load', { name, password });
       session.name = result.name || name;
       session.password = password;
-      applyPayload(result.payload || {}, session.name);
-      status.textContent = `Datensatz „${session.name}“ ist geöffnet. Große Unterrichtsbilder werden erst bei Bedarf geladen.`;
+      const local = await storedPendingSync(session.name);
+      if (local) {
+        session.payload = result.payload || {};
+        session.versionTag = local.baseVersionTag || '';
+        applyPendingSnapshot(local);
+        const changedOnServer = Boolean(local.baseVersionTag && result.versionTag !== local.baseVersionTag);
+        status.textContent = changedOnServer
+          ? conflictMessage()
+          : `Datensatz „${session.name}“ ist geöffnet. Noch nicht synchronisierte lokale Änderungen wurden wiederhergestellt.`;
+      } else {
+        applyPayload(result.payload || {}, session.name, result.versionTag);
+        status.textContent = `Datensatz „${session.name}“ ist geöffnet. Große Unterrichtsbilder werden erst bei Bedarf geladen.`;
+      }
     } catch (error) {
       status.textContent = error.message;
     }
@@ -617,6 +783,18 @@
   }
 
   function installGlobalBridges() {
+    if (typeof deleteCard === 'function' && !deleteCard.__farbatlasOfflineSync) {
+      const originalDeleteCard = deleteCard;
+      deleteCard = function farbatlasDeleteCard(kind, value) {
+        const before = deletedRecords.size;
+        const result = originalDeleteCard(kind, value);
+        if (deletedRecords.size !== before) {
+          persistPendingSync('Offline vorgenommene Löschungen warten auf die Synchronisierung').catch(() => {});
+        }
+        return result;
+      };
+      deleteCard.__farbatlasOfflineSync = true;
+    }
     if (typeof bindPhotos === 'function' && !bindPhotos.__farbatlasLazy) {
       const originalBindPhotos = bindPhotos;
       bindPhotos = function farbatlasBindPhotos() {
@@ -766,9 +944,20 @@
     const notice = q('#offlinePendingNotice');
     if (!notice) return;
     const count = pendingItems().length;
-    notice.classList.toggle('hidden', !count);
-    if (count) {
-      notice.innerHTML = `<b>${count} selbst aufgenommene${count === 1 ? 's Foto ist' : ' Fotos sind'} nur auf diesem Gerät gespeichert.</b><br>Damit ${count === 1 ? 'es' : 'sie'} in die gemeinsame Bibliothek gelangt, stelle eine Internetverbindung her, öffne denselben Datensatz und wähle „Datensatz speichern“. Schließe die App erst, wenn die erfolgreiche Übertragung bestätigt wurde.`;
+    const deletionCount = Number(pendingSync?.deletionCount || 0);
+    const hasPending = Boolean(pendingSync || count || deletionCount);
+    notice.classList.toggle('hidden', !hasPending);
+    if (hasPending) {
+      const parts = [];
+      if (count) parts.push(`${count} neue${count === 1 ? 's Bild' : ' Bilder'}`);
+      if (deletionCount) parts.push(`${deletionCount} ${deletionCount === 1 ? 'Löschung' : 'Löschungen'}`);
+      notice.innerHTML = `<b>Noch nicht synchronisiert: ${parts.join(' und ') || 'lokale Änderungen'}.</b><br>Die Änderungen bleiben auf diesem Gerät erhalten. Stelle eine Internetverbindung her und starte die Synchronisierung bewusst. Serveränderungen werden vor dem Übertragen geprüft.<div class="farbatlas-speed-actions"><button id="syncPendingChanges" class="btn good" ${navigator.onLine ? '' : 'disabled'}>Ausstehende Änderungen synchronisieren</button></div>`;
+      const button = q('#syncPendingChanges');
+      if (button) button.onclick = () => {
+        if (q('#saveDatasetName') && !q('#saveDatasetName').value) q('#saveDatasetName').value = session.name || currentDatasetName;
+        if (q('#saveDatasetPassword') && !q('#saveDatasetPassword').value && session.password) q('#saveDatasetPassword').value = session.password;
+        saveV11(false);
+      };
     }
   }
 
@@ -915,9 +1104,12 @@
     registerServiceWorker();
     window.addEventListener('online', () => {
       updatePendingNotice();
-      if (pendingItems().length) setOfflineStatus('Die Internetverbindung ist wieder da. Speichere jetzt den Datensatz und warte auf die Erfolgsmeldung.', 'success');
+      if (pendingSync || pendingItems().length) setOfflineStatus('Die Internetverbindung ist wieder da. Ausstehende lokale Änderungen können jetzt gezielt synchronisiert werden.', 'success');
     });
-    window.addEventListener('offline', () => setOfflineStatus('Offline: Vorbereitete Inhalte bleiben auf diesem Gerät verfügbar. Noch nicht übertragene Fotos bleiben vorgemerkt.'));
+    window.addEventListener('offline', () => {
+      updatePendingNotice();
+      setOfflineStatus('Offline: Neue Bilder, Löschungen und weitere lokale Änderungen bleiben auf diesem Gerät vorgemerkt.');
+    });
     if (typeof setInterval !== 'function') return;
     let attempts = 0;
     const restoreBridge = setInterval(() => {
@@ -927,6 +1119,9 @@
         publishDatasetContext(currentDatasetName, true);
         installLazyImages();
         showOfflineManifest();
+        storedPendingSync(currentDatasetName).then((local) => {
+          if (local) applyPendingSnapshot(local);
+        });
         clearInterval(restoreBridge);
       } else if (attempts > 20) clearInterval(restoreBridge);
     }, 250);

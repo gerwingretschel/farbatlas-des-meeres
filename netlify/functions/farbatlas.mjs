@@ -1002,6 +1002,13 @@ export default async (req) => {
       if (existingEntry && passwordHash(body.password, existingEntry.data.salt) !== existingEntry.data.passwordHash) {
         throw new ValidationError("Datensatz-Passwort ist falsch.", 401);
       }
+      if (existingEntry && body.expectedVersionTag && body.expectedVersionTag !== existingEntry.etag) {
+        throw new ValidationError(
+          "Der Datensatz wurde auf dem Server zwischenzeitlich geändert. Lokale Änderungen wurden nicht überschrieben.",
+          409,
+          { conflict: true, currentVersionTag: existingEntry.etag }
+        );
+      }
       const salt = existingEntry?.data.salt || crypto.randomBytes(16).toString("hex");
       const value = {
         name: normalizeName(body.name),
@@ -1018,6 +1025,7 @@ export default async (req) => {
       if (!result.modified) throw new ValidationError("Datensatz wurde gleichzeitig geändert. Bitte neu laden.", 409);
       return reply({
         message: existingEntry ? "Datensatz wurde erfolgreich aktualisiert." : "Datensatz wurde erfolgreich neu angelegt.",
+        versionTag: result.etag,
       });
     }
     throw new ValidationError("Unbekannte Aktion.");

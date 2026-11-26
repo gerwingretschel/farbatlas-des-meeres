@@ -3,7 +3,7 @@ Stand: 2026-11-26
 
 ERGEBNIS
 - node --check: erfolgreich
-- node --test: 38 bestanden, 0 fehlgeschlagen
+- node --test: 44 bestanden, 0 fehlgeschlagen
 - node inject-v10.mjs: erfolgreich
 
 ABGEDECKTE SICHERHEITSREGELN
@@ -29,6 +29,12 @@ ABGEDECKTE SICHERHEITSREGELN
 - Jedes Thumbnail wird clientseitig nochmals auf höchstens 480 px und 80 KB geprüft.
 - Lokale Kartenansicht verwendet die Thumbnail-Variante; lokale Großansicht verwendet die Unterrichtsversion.
 - Nach Upload werden unterschiedliche `imageKey`- und `thumbnailKey`-Werte verlangt und gemeinsam in der Datensatzreferenz gespeichert.
+- Netlify-Login-/Edge-Access-HTML wird als Zugangsproblem erkannt und niemals als HTML-Fehlertext angezeigt.
+- Offline-Importe und Offline-Löschungen werden gemeinsam in einem dauerhaften Pending-Sync-Snapshot erhalten.
+- Bereits hochgeladene Bildpaare bleiben bei fehlgeschlagenem Abschluss für den nächsten Synchronisationsversuch referenziert und werden nicht doppelt hochgeladen.
+- Nach Wiederherstellung der Verbindung steht eine ausdrückliche Synchronisationsaktion bereit.
+- Client und Server vergleichen den geladenen Versionsstand; zwischenzeitliche Serveränderungen führen zu einem geschützten 409-Konflikt.
+- Bei Fehler oder Konflikt bleiben lokale Änderungen erhalten und der Serverstand wird nicht still überschrieben.
 
 REGRESSIONEN
 - Bestehende Kursleiter-, Bildkomprimierungs- und Hilfsfunktionen: Tests bestanden.
@@ -45,6 +51,9 @@ NOCH IM ECHTEN BRANCH-DEPLOY ZU PRÜFEN
 - Mehrfachimportanzeige mit mindestens vier gleichzeitig ausgewählten Dateien.
 - Pixel- und Dateigrößenprüfung eines großen Smartphonefotos vor und nach erneutem Öffnen des gespeicherten Datensatzes.
 - Netzwerkprüfung, dass Karten- und Großansicht unterschiedliche, korrekt zugeordnete Bildschlüssel verwenden.
+- Offline-Kombination aus neuem Import und Löschung vorhandener Testbilder mit absichtlich nicht erreichbarem Server.
+- Wiederverbindungs- und Synchronisationstest einschließlich erneutem Öffnen des Datensatzes.
+- Konflikttest mit paralleler Serveränderung in einer zweiten Sitzung.
 - Mobile Darstellung und langsame Verbindung.
 - Beide Offline-Stufen auf demselben Gerät/Browser.
 - Stichproben der bestehenden Unterrichtsbilder.

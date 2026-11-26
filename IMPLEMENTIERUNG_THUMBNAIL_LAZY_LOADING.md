@@ -34,6 +34,27 @@ Die korrigierte Fassung:
 - verlangt nach dem Serverupload zwei vorhandene und unterschiedliche Schlüssel (`imageKey` und `thumbnailKey`),
 - speichert beide Schlüssel anschließend gemeinsam in derselben Bildreferenz des Datensatzes.
 
+## Robuster Offline-Speicher- und Synchronisationsablauf
+
+Eine Netlify-Edge-Access-Seite kann bei einem nicht erreichbaren beziehungsweise erneut geschützten Deploy eine HTML-Seite statt der erwarteten JSON-Antwort liefern. Diese HTML-Antwort wurde bisher als normaler Fehlertext in den Farbatlas übernommen.
+
+Die korrigierte Fassung:
+
+- erkennt HTML, Login-Redirects, ungültige Serverantworten und echte Netzwerkfehler,
+- zeigt niemals HTML/JavaScript der Zugangsseite im Farbatlas an,
+- ersetzt dies durch eine verständliche Meldung, dass die Änderungen noch nicht synchronisiert sind,
+- speichert ausstehende Änderungen dauerhaft in IndexedDB (`pending-sync`),
+- bewahrt dabei neue vorbereitete Bildpaare, bereits hochgeladene aber noch nicht abschließend gespeicherte Bildpaare, Bearbeitungsdaten und offline vorgenommene Löschungen gemeinsam auf,
+- lädt einen solchen lokalen Arbeitsstand nach erneutem Öffnen wieder,
+- zeigt nach Rückkehr der Verbindung die Schaltfläche **„Ausstehende Änderungen synchronisieren“**,
+- prüft vor der Übertragung den aktuellen Serverstand,
+- sendet beim abschließenden Speichern den beim ursprünglichen Laden erhaltenen Versionsstand mit,
+- lässt den Server das Speichern mit HTTP 409 ablehnen, falls der Datensatz zwischenzeitlich verändert wurde,
+- überschreibt bei einem Konflikt weder den Serverstand noch den lokalen Arbeitsstand,
+- lädt lokal bereits wieder gelöschte, noch nicht synchronisierte Importbilder nicht unnötig hoch.
+
+Ein aus Unterrichtsbild und Thumbnail bestehendes Paar, das bereits hochgeladen wurde, dessen abschließende Datensatzspeicherung aber scheiterte, bleibt lokal mit beiden Schlüsseln vorgemerkt. Bei der späteren Synchronisierung wird es nicht doppelt hochgeladen.
+
 ## Verbindliche Bildarchitektur
 
 - **Unterrichtsbild:** JPEG, längste Kante höchstens 1.600 px, höchstens 400 KB, keine Hochskalierung.
@@ -96,6 +117,7 @@ Die korrigierte Fassung:
 - `test/thumbnail-prefetch.test.mjs` – exakte Fenstergröße, Randfälle und Ausschluss von Unterrichtsbildern beim Vorladen.
 - `test/thumbnail-first-load.test.mjs` – Regressionstest: ein zuvor nicht gespeichertes sichtbares Thumbnail wird erstmals vom Server geladen und ersetzt den Platzhalter.
 - `test/import-pipeline.test.mjs` – Mehrfachimport, konsistente Zählung, Grenzwerte und getrennte Speicherung/Zuordnung beider Bildvarianten.
+- `test/offline-sync.test.mjs` – Login-HTML-Abwehr, Offline-Import plus Offline-Löschung, fehlgeschlagener Abschluss, spätere Synchronisierung und Versionskonflikt.
 
 ## Aktualisierung auf dem bestehenden Branch
 
@@ -121,7 +143,7 @@ npm run build
 Erwartung:
 
 - Syntaxprüfung ohne Fehler.
-- 38 Tests bestanden, 0 fehlgeschlagen.
+- 44 Tests bestanden, 0 fehlgeschlagen.
 - Build erfolgreich.
 
 Danach in GitHub Desktop committen:
@@ -150,5 +172,9 @@ Anschließend `Push origin` ausführen. Erst den separaten Netlify-Branch-Deploy
 14. **Mehrfachimport:** Vier neue Fotos gemeinsam auswählen. Erwartung nach der Vorbereitung: `100 % · 4 von 4 Bildern vorbereitet`, `4 ausgewählt`, `4 importiert`, sofern keine Datei ungültig oder unlesbar war.
 15. **Unterrichtsversion:** Ein Smartphonefoto mit deutlich mehr als 1.600 Pixeln und mehr als 400 KB importieren. In der Großansicht und nach erneutem Öffnen des gespeicherten Datensatzes muss die Unterrichtsversion höchstens 1.600 Pixel und höchstens 400 KB haben.
 16. **Getrennte Varianten:** In der Kartenansicht muss das Thumbnail verwendet werden; erst die Großansicht darf die zugehörige Unterrichtsversion laden. Im Netzwerkprotokoll müssen dafür unterschiedliche Bildschlüssel erscheinen.
+17. **Offline-Import und Löschung:** Verbindung trennen, ein neues Bild importieren und mindestens ein vorhandenes Testbild löschen. „Datensatz speichern“ wählen. Erwartung: keine HTML-Ausgabe; stattdessen Hinweis, dass neues Bild und Löschung lokal erhalten und noch nicht synchronisiert sind.
+18. **Wiederverbinden:** Verbindung herstellen. Erwartung: verständlicher Hinweis und Schaltfläche „Ausstehende Änderungen synchronisieren“. Nach erfolgreicher Synchronisierung den Datensatz neu öffnen: neues Bild vorhanden, offline gelöschtes Testbild nicht mehr vorhanden.
+19. **Nicht erreichbarer/geschützter Deploy:** Eine HTML-Login-Antwort simulieren beziehungsweise mit aktivem Edge-Zugangsschutz testen. Im Statusbereich darf kein `<DOCTYPE>`, `<script>`, „Login Redirect“ oder Seitenquelltext erscheinen.
+20. **Konfliktschutz:** Zwischen Offline-Beginn und Synchronisierung denselben Serverdatensatz in einer zweiten Sitzung verändern. Die Synchronisierung muss mit einem Konflikthinweis stoppen; weder lokaler noch neuer Serverstand darf still überschrieben werden.
 
 Erst nach erfolgreicher Abnahme: Pull Request erstellen, Netlify Deploy Preview prüfen und anschließend nach `main` mergen.
