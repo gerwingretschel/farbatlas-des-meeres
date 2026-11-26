@@ -2,6 +2,19 @@
 
 Stand: 26. November 2026
 
+## Korrektur des Erstladefehlers
+
+Die fehlerhafte Fassung entfernte ein sichtbares Bild bereits beim ersten Sichtbarkeitsereignis aus der Beobachtung, noch bevor der asynchrone Abruf erfolgreich abgeschlossen war. Gleichzeitig verwendete der Prefetch einen anderen Ladeweg als die sichtbare Bildkarte. Ein vorübergehender oder konkurrierender Fehler ließ dadurch den Platzhalter dauerhaft stehen. Bereits lokal gespeicherte Thumbnails waren nicht betroffen.
+
+Die korrigierte Fassung:
+
+- führt sichtbares Laden und Prefetch über denselben deduplizierten `assetUrl`-/In-flight-Abruf,
+- priorisiert den normalen sichtbaren Abruf unabhängig von der Hintergrundwarteschlange,
+- beendet die Sichtbarkeitsbeobachtung erst nach erfolgreichem Einsetzen des Thumbnails,
+- versucht einen vorübergehend fehlgeschlagenen sichtbaren Abruf begrenzt erneut,
+- behandelt die Browseranzeige „online/offline“ nicht mehr als verlässliche Sperre für einen möglichen Netzwerkabruf,
+- verwendet weder beim sichtbaren Thumbnail-Laden noch beim Prefetch Unterrichtsbilder als Ersatz.
+
 ## Verbindliche Bildarchitektur
 
 - **Unterrichtsbild:** JPEG, längste Kante höchstens 1.600 px, höchstens 400 KB, keine Hochskalierung.
@@ -26,6 +39,8 @@ Stand: 26. November 2026
    - An Anfang und Ende einer Bildserie wird das Fenster automatisch gekürzt; es gibt keine doppelten Abrufe.
    - Der Vorgang beginnt erst beim Anzeigen eines Referenzbilds und verändert daher das schnelle Öffnen des Datensatzes nicht.
    - Dieser Hintergrundpfad darf ausschließlich Vorschaubilder abrufen. Fehlende Vorschaubilder lösen insbesondere keinen Abruf eines Unterrichtsbilds aus.
+   - Sichtbares Lazy Loading und Hintergrund-Prefetch verwenden denselben laufenden Thumbnail-Abruf. Ein Hintergrundabruf kann das erstmalige Laden eines sichtbaren Bilds daher weder blockieren noch durch einen konkurrierenden zweiten Abruf ersetzen.
+   - Erst nach erfolgreichem Laden wird ein sichtbares Bild aus der Sichtbarkeitsbeobachtung entfernt. Vorübergehende Fehler lassen den Platzhalter nicht dauerhaft stehen, sondern werden begrenzt erneut versucht.
 
 4. **Unterrichtsbild auf Anforderung**
    - Im Normalmodus wird das Unterrichtsbild beim Öffnen der Detail-/Vollbildansicht geladen.
@@ -60,6 +75,7 @@ Stand: 26. November 2026
 - `test/thumbnail-utils.test.mjs` – Grenzwert- und Statusprüfungen.
 - `test/thumbnail-integration.test.mjs` – Integrations- und Sicherheitsprüfungen.
 - `test/thumbnail-prefetch.test.mjs` – exakte Fenstergröße, Randfälle und Ausschluss von Unterrichtsbildern beim Vorladen.
+- `test/thumbnail-first-load.test.mjs` – Regressionstest: ein zuvor nicht gespeichertes sichtbares Thumbnail wird erstmals vom Server geladen und ersetzt den Platzhalter.
 
 ## Aktualisierung auf dem bestehenden Branch
 
@@ -85,7 +101,7 @@ npm run build
 Erwartung:
 
 - Syntaxprüfung ohne Fehler.
-- 30 Tests bestanden, 0 fehlgeschlagen.
+- 32 Tests bestanden, 0 fehlgeschlagen.
 - Build erfolgreich.
 
 Danach in GitHub Desktop committen:
@@ -103,12 +119,13 @@ Anschließend `Push origin` ausführen. Erst den separaten Netlify-Branch-Deploy
 3. **Neu öffnen:** Nur sichtbare Vorschaubilder sollen beim Blättern/Scrollen nachgeladen werden.
 4. **Galerie-Vorladen:** Ein mittleres Referenzbild öffnen und im Netzwerkprotokoll prüfen: aktuelles Thumbnail sowie höchstens fünf folgende und zwei vorherige Thumbnails werden vorbereitet. Am Anfang und Ende der Serie muss sich das Fenster entsprechend verkürzen.
 5. **Keine Unterrichtsbilder vorladen:** Während desselben Tests dürfen durch die Vorladefunktion keine benachbarten Unterrichtsbilder übertragen werden.
-6. **Normalmodus:** Detailansicht öffnen; genau das aktuell gewählte Unterrichtsbild soll geladen werden.
-7. **Datensparmodus:** Detailansicht öffnen; das aktuelle Unterrichtsbild darf erst nach Klick auf „Großes Unterrichtsbild laden“ übertragen werden. Die vorausschauenden Thumbnail-Abrufe dürfen weiterarbeiten.
-8. **Importtest:** Ein großes Smartphonefoto importieren und speichern. Danach müssen Unterrichtsbild und Vorschaubild vorhanden sein; das Original darf nicht als dritte Serverdatei gespeichert werden.
-9. **Offline datensparend:** Vorbereitung bis zur Abschlussmeldung laufen lassen, Verbindung trennen, Atlas/Thumbnails/Texte prüfen.
-10. **Offline komplett:** Mit einer kleinen Testbibliothek zusätzlich Detailbilder vorbereiten und offline öffnen.
-11. **Offline-Foto:** Verbindung trennen, Foto importieren, Hinweis „nur auf diesem Gerät“ prüfen, Verbindung wiederherstellen und Datensatz bis zur Erfolgsmeldung speichern.
-12. **Bestehende Unterrichtsbilder:** Stichproben in der Detailansicht prüfen. Die Thumbnail-Erzeugung darf sie nicht verändert haben.
+6. **Erstmaliges Laden:** Browserdaten für den Deploy Preview löschen oder einen neuen Browser verwenden. Eine Art mit bisher nie geladenen Vorschaubildern öffnen. Sichtbare Platzhalter müssen durch die neuen Thumbnails ersetzt werden; ein Neuladen oder vorheriges Öffnen darf nicht nötig sein.
+7. **Normalmodus:** Detailansicht öffnen; genau das aktuell gewählte Unterrichtsbild soll geladen werden.
+8. **Datensparmodus:** Detailansicht öffnen; das aktuelle Unterrichtsbild darf erst nach Klick auf „Großes Unterrichtsbild laden“ übertragen werden. Die vorausschauenden Thumbnail-Abrufe dürfen weiterarbeiten.
+9. **Importtest:** Ein großes Smartphonefoto importieren und speichern. Danach müssen Unterrichtsbild und Vorschaubild vorhanden sein; das Original darf nicht als dritte Serverdatei gespeichert werden.
+10. **Offline datensparend:** Vorbereitung bis zur Abschlussmeldung laufen lassen, Verbindung trennen, Atlas/Thumbnails/Texte prüfen.
+11. **Offline komplett:** Mit einer kleinen Testbibliothek zusätzlich Detailbilder vorbereiten und offline öffnen.
+12. **Offline-Foto:** Verbindung trennen, Foto importieren, Hinweis „nur auf diesem Gerät“ prüfen, Verbindung wiederherstellen und Datensatz bis zur Erfolgsmeldung speichern.
+13. **Bestehende Unterrichtsbilder:** Stichproben in der Detailansicht prüfen. Die Thumbnail-Erzeugung darf sie nicht verändert haben.
 
 Erst nach erfolgreicher Abnahme: Pull Request erstellen, Netlify Deploy Preview prüfen und anschließend nach `main` mergen.

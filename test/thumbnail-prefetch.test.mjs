@@ -37,7 +37,9 @@ test('background prefetch is thumbnail-only and runs when a reference image is s
   const start = client.indexOf('function scheduleThumbnailPrefetch');
   const end = client.indexOf('window.FarbatlasThumbnailPrefetch', start);
   const implementation = client.slice(start, end);
-  assert.match(implementation, /assetBlob\(item, 'thumbnail'\)/);
+  assert.match(implementation, /assetUrl\(item, 'thumbnail'\)/);
+  assert.doesNotMatch(implementation, /assetBlob\(item, 'thumbnail'\)/);
   assert.doesNotMatch(implementation, /assetBlob\(item, 'teaching'\)/);
+  assert.doesNotMatch(implementation, /assetUrl\(item, 'teaching'\)/);
   assert.match(client, /scheduleThumbnailPrefetch\(gallerySet, galleryIndex\)/);
 });

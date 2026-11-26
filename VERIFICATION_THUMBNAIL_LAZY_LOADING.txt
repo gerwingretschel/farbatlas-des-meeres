@@ -3,7 +3,7 @@ Stand: 2026-11-26
 
 ERGEBNIS
 - node --check: erfolgreich
-- node --test: 30 bestanden, 0 fehlgeschlagen
+- node --test: 32 bestanden, 0 fehlgeschlagen
 - node inject-v10.mjs: erfolgreich
 
 ABGEDECKTE SICHERHEITSREGELN
@@ -18,6 +18,9 @@ ABGEDECKTE SICHERHEITSREGELN
 - Beim Anzeigen eines Referenzbilds wird exakt das Thumbnail-Fenster „aktuell + 5 nächste + 2 vorherige“ im Hintergrund vorbereitet.
 - Das Vorladefenster wird an Serienanfang und -ende begrenzt und enthält keine Duplikate.
 - Der Vorladepfad ruft ausschließlich `thumbnail` ab und besitzt keinen Unterrichtsbild-Fallback.
+- Sichtbares Lazy Loading und Prefetch verwenden denselben URL-/In-flight-Mechanismus; Prefetch kann einen sichtbaren Erstabruf nicht blockieren.
+- Regressionstest bestätigt: Ein bisher nicht gespeichertes sichtbares Thumbnail wird über `get-image` geladen und ersetzt den Platzhalter.
+- Sichtbare Bilder werden erst nach erfolgreichem Laden aus der Beobachtung entfernt; vorübergehende Fehler erhalten begrenzte Wiederholungsversuche.
 - Datensparmodus verlangt eine bewusste Aktion vor dem Laden des Unterrichtsbilds.
 - Offline-Vorbereitung bietet Vorschaubild- und Komplettstufe.
 - Neuer Import erzeugt und überträgt Unterrichtsbild und Vorschaubild als Paar.

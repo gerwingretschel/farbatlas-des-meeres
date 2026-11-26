@@ -132,7 +132,7 @@
     const storageKey = cacheKey(session.name || currentDatasetName, variant, key);
     const cached = await dbGet(OFFLINE_STORE, storageKey).catch(() => null);
     if (cached instanceof Blob) return cached;
-    if (!allowNetwork || !navigator.onLine) {
+    if (!allowNetwork) {
       throw new Error('Dieses Bild wurde nicht für die Offline-Nutzung vorbereitet. Stelle eine Internetverbindung her und starte die Vorbereitung erneut.');
     }
     const response = await api('get-image', {
@@ -420,33 +420,42 @@
 
   async function loadThumbnailInto(image, record) {
     const item = itemFor(record);
-    if (!item || observedImages.has(image) && image.dataset.thumbnailLoaded === '1') return;
+    if (!item || image.dataset.thumbnailLoaded === '1') return true;
+    if (image.dataset.thumbnailLoading === '1') return false;
+    image.dataset.thumbnailLoading = '1';
     try {
-      let url;
-      if (item.thumbnailKey || item.thumbnailBlob || item.thumbnailSrc) {
-        url = await assetUrl(item, 'thumbnail');
-      } else if (!dataSaver) {
-        const teachingBlob = await assetBlob(item, 'teaching');
-        const thumbnail = await resizeToBudget(teachingBlob, {
-          maxEdge: RULES.thumbnailMaxEdge,
-          maxBytes: RULES.thumbnailMaxBytes,
-          minQuality: 0.48,
-          maxQuality: 0.88,
-        });
-        item.thumbnailBlob = thumbnail.blob;
-        item.thumbnailSrc = await blobToDataUrl(thumbnail.blob);
-        url = await assetUrl(item, 'thumbnail');
-      } else {
-        image.alt = `${record.de || 'Bild'} – Vorschaubild fehlt`;
-        return;
+      if (!(item.thumbnailKey || item.thumbnailBlob || item.thumbnailSrc)) {
+        throw new Error('Für dieses Bild fehlt noch ein Vorschaubild.');
       }
+      // Visible images use the shared URL/in-flight path and therefore never wait behind prefetch work.
+      const url = await assetUrl(item, 'thumbnail');
+      if (!image.isConnected && typeof image.isConnected === 'boolean') return false;
       image.src = url;
       image.dataset.thumbnailLoaded = '1';
+      image.dataset.thumbnailAttempts = '0';
+      image.classList.remove('farbatlas-image-unavailable');
       record.src = url;
+      return true;
     } catch (error) {
       image.alt = `${record.de || 'Bild'} – ${error.message}`;
       image.classList.add('farbatlas-image-unavailable');
+      return false;
+    } finally {
+      image.dataset.thumbnailLoading = '0';
     }
+  }
+
+  function retryVisibleThumbnail(image, record) {
+    const attempts = Number(image.dataset.thumbnailAttempts || 0) + 1;
+    image.dataset.thumbnailAttempts = String(attempts);
+    if (attempts > 3 || typeof setTimeout !== 'function') return;
+    setTimeout(async () => {
+      if (image.dataset.thumbnailLoaded === '1') return;
+      if (!image.isConnected && typeof image.isConnected === 'boolean') return;
+      const loaded = await loadThumbnailInto(image, record);
+      if (loaded) observer?.unobserve(image);
+      else retryVisibleThumbnail(image, record);
+    }, attempts * 500);
   }
 
   function thumbnailPrefetchIndexes(length, currentIndex, next = THUMBNAIL_PREFETCH_NEXT, previous = THUMBNAIL_PREFETCH_PREVIOUS) {
@@ -469,7 +478,7 @@
         if (generation !== thumbnailPrefetchGeneration) return;
         try {
           // Deliberately restricted to thumbnails: teaching images remain request-only.
-          await assetBlob(item, 'thumbnail');
+          await assetUrl(item, 'thumbnail');
         } catch {
           // A missing thumbnail must not trigger a teaching-image fallback in the prefetch path.
         }
@@ -488,9 +497,11 @@
   const observer = typeof IntersectionObserver === 'function'
     ? new IntersectionObserver((entries) => entries.forEach((entry) => {
       if (!entry.isIntersecting) return;
-      observer.unobserve(entry.target);
       const record = records.find((candidate) => candidate.id === entry.target.dataset.recordId);
-      if (record) loadThumbnailInto(entry.target, record);
+      if (record) loadThumbnailInto(entry.target, record).then((loaded) => {
+        if (loaded) observer.unobserve(entry.target);
+        else retryVisibleThumbnail(entry.target, record);
+      });
     }), { rootMargin: '320px 0px' })
     : null;
 
