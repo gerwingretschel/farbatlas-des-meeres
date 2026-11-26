@@ -1,0 +1,5 @@
+dc7b776c42288b51746b4e714e2fe13883d48ad5c69233de7abc13cc61eb2dee  course-leader-client.js
+09064007e79056747ed79f04baaf15f5aec1b5a395f8b2cb16b0bb66f7fb17ac  test/course-leader-change-collection.test.mjs
+43a1fc293679a8483e2d76c26ef1d4f3b5b322420f22d91798a24ec95bd610d2  test/course-leader-ui-integration.test.mjs
+efc5865e462b5df700020b2aa26f98adf688a4585504f29aa0a2c4c502dd4434  test/course-utils.test.mjs
+e2409d4900f57ea1fbf66e5730a65e7eb22c2d10effdac328ca8047c3fca8540  FARBATLAS_KL_SPEICHERFIX_2026-11-26.patch

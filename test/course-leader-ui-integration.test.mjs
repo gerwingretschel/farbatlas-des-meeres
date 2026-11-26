@@ -30,3 +30,13 @@ test('course saving and version restore support permission-aware animal fields',
   assert.match(server, /recordFields: \[\{ key: change\.key, field: change\.field/);
   assert.match(server, /assertAssigned\(user, name\)/);
 });
+
+test('course changes are based only on the freshly loaded dataset records', () => {
+  assert.match(course, /let datasetRecordKeys = new Set\(\)/);
+  assert.match(course, /datasetRecordKeys\.add\(key\)/);
+  assert.match(course, /recordFields\[key\]\[field\.key\] = String\(edit\[field\.key\] \?\? fallback\[field\.key\]/);
+  assert.match(course, /for \(const key of datasetRecordKeys\)/);
+  assert.match(course, /recordEdits\?\.\[key\]\?\.knowledge \?\? baseValue/);
+  assert.doesNotMatch(course, /const liveRecords = new Map/);
+  assert.doesNotMatch(course, /Object\.keys\(baseline\.knowledge\).*Object\.keys\(recordEdits/);
+});

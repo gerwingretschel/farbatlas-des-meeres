@@ -1,0 +1,194 @@
+diff --git a/course-leader-client.js b/course-leader-client.js
+index b5598eb..87a05bc 100644
+--- a/course-leader-client.js
++++ b/course-leader-client.js
+@@ -27,6 +27,7 @@
+   let selectedDataset = '';
+   let versionTag = '';
+   let baseline = { knowledge: {}, academicLinks: {}, recordFields: {}, groups: {}, effectiveGroups: {} };
++  let datasetRecordKeys = new Set();
+   let adminUsers = [];
+   let adminDatasets = [];
+ 
+@@ -262,6 +263,7 @@
+     selectedDataset = '';
+     versionTag = '';
+     baseline = { knowledge: {}, academicLinks: {}, recordFields: {}, groups: {}, effectiveGroups: {} };
++    datasetRecordKeys = new Set();
+     await clearLocalDatasetCache();
+     location.reload();
+   }
+@@ -271,26 +273,25 @@
+     const recordFields = {};
+     const groups = {};
+     const effectiveGroups = {};
+-    const liveRecords = new Map(
+-      typeof records !== 'undefined' && Array.isArray(records)
+-        ? records.map((record) => [record.name, record])
+-        : []
+-    );
++    datasetRecordKeys = new Set();
+     for (const image of payload.images || []) {
+-      const parts = String(image.name || '').split('#');
+-      const edit = payload.recordEdits?.[image.name] || {};
+-      const live = liveRecords.get(image.name) || {};
++      const key = String(image.name || '');
++      if (!key) continue;
++      datasetRecordKeys.add(key);
++      const parts = key.split('#');
++      const edit = payload.recordEdits?.[key] || {};
+       const fallback = {
+         family: parts[0] || '', genus: parts[1] || '', species: parts[2] || '',
+         de: parts[3] || '', en: parts[4] || '', place: parts[6] || '', author: parts[7] || ''
+       };
+-      recordFields[image.name] = {};
++      recordFields[key] = {};
+       for (const field of RECORD_FIELDS.filter((entry) => entry.key !== 'group')) {
+-        recordFields[image.name][field.key] = String(live[field.key] ?? edit[field.key] ?? fallback[field.key] ?? '').trim();
++        recordFields[key][field.key] = String(edit[field.key] ?? fallback[field.key] ?? '').trim();
+       }
+-      knowledge[image.name] = sanitizeKnowledgeHtml(live.knowledge ?? edit.knowledge ?? '');
+-      groups[image.name] = String(payload.groupMoves?.[image.name] || '');
+-      effectiveGroups[image.name] = String(live.group || groups[image.name] || '');
++      knowledge[key] = sanitizeKnowledgeHtml(edit.knowledge ?? '');
++      groups[key] = String(payload.groupMoves?.[key] || '');
++      const inferredGroup = typeof group === 'function' ? group(recordFields[key].family) : '';
++      effectiveGroups[key] = String(groups[key] || inferredGroup || '');
+     }
+     const academicLinks = {};
+     for (const [group, value] of Object.entries(payload.savedGroups || {})) {
+@@ -364,10 +365,9 @@
+     }
+ 
+     if (hasPermission(PERMISSION_KNOWLEDGE)) {
+-      const keys = new Set([...Object.keys(baseline.knowledge), ...Object.keys(recordEdits || {})]);
+-      for (const key of keys) {
++      for (const key of datasetRecordKeys) {
+         const baseValue = baseline.knowledge[key] || '';
+-        const value = sanitizeKnowledgeHtml(recordEdits?.[key]?.knowledge || '');
++        const value = sanitizeKnowledgeHtml(recordEdits?.[key]?.knowledge ?? baseValue);
+         if (value !== baseValue) knowledge.push({ key, baseValue, value });
+       }
+     }
+diff --git a/test/course-leader-change-collection.test.mjs b/test/course-leader-change-collection.test.mjs
+new file mode 100755
+index 0000000..9901219
+--- /dev/null
++++ b/test/course-leader-change-collection.test.mjs
+@@ -0,0 +1,74 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import vm from 'node:vm';
++
++function loadCourseChangeHarness() {
++  const source = fs.readFileSync(new URL('../course-leader-client.js', import.meta.url), 'utf8');
++  const instrumented = source.replace(
++    "  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);\n  else init();",
++    `  window.__courseChangeTest = {
++      captureBaseline,
++      collectCourseChanges,
++      setProfile: (value) => { courseProfile = value; },
++      setDataset: (value) => { selectedDataset = value; }
++    };`
++  );
++  assert.notEqual(instrumented, source, 'test harness hook must be installed');
++
++  const context = {
++    window: {},
++    document: {},
++    sessionStorage: {
++      getItem: () => '',
++      setItem: () => {},
++      removeItem: () => {},
++    },
++    sanitizeKnowledgeHtml: (value) => String(value ?? ''),
++    safeKnowledgeUrl: (value) => String(value ?? '').trim(),
++    group: () => 'Fische',
++    recordEdits: {},
++    groupMoves: {},
++    savedGroups: {},
++    records: [],
++    console,
++    Set,
++    Map,
++  };
++  vm.runInNewContext(instrumented, context, { filename: 'course-leader-client.js' });
++  return context;
++}
++
++test('collects only the real knowledge change from records in the opened dataset', () => {
++  const context = loadCourseChangeHarness();
++  const currentKey = 'f#g#a#de#en#d#p#u#current.jpg';
++  const orphanKey = 'old#record#not#in#dataset#x#x#x#orphan.jpg';
++  const api = context.window.__courseChangeTest;
++
++  api.setProfile({ permissions: ['knowledge.edit'] });
++  api.setDataset('Rotes Meer');
++  context.records = [{ name: currentKey, knowledge: 'staler lokaler Wert' }];
++  api.captureBaseline({
++    images: [{ name: currentKey }],
++    recordEdits: {
++      [currentKey]: { knowledge: 'Serverwert' },
++      [orphanKey]: { knowledge: 'verwaiste Altlast' },
++    },
++    groupMoves: {},
++    savedGroups: {},
++  });
++
++  context.recordEdits = {
++    [currentKey]: { knowledge: 'Echte Änderung' },
++    [orphanKey]: { knowledge: 'verwaiste Altlast' },
++  };
++
++  assert.deepEqual(
++    JSON.parse(JSON.stringify(api.collectCourseChanges())),
++    {
++      knowledge: [{ key: currentKey, baseValue: 'Serverwert', value: 'Echte Änderung' }],
++      recordFields: [],
++      academicLinks: [],
++    }
++  );
++});
+diff --git a/test/course-leader-ui-integration.test.mjs b/test/course-leader-ui-integration.test.mjs
+index a657688..707253b 100644
+--- a/test/course-leader-ui-integration.test.mjs
++++ b/test/course-leader-ui-integration.test.mjs
+@@ -30,3 +30,13 @@ test('course saving and version restore support permission-aware animal fields',
+   assert.match(server, /recordFields: \[\{ key: change\.key, field: change\.field/);
+   assert.match(server, /assertAssigned\(user, name\)/);
+ });
++
++test('course changes are based only on the freshly loaded dataset records', () => {
++  assert.match(course, /let datasetRecordKeys = new Set\(\)/);
++  assert.match(course, /datasetRecordKeys\.add\(key\)/);
++  assert.match(course, /recordFields\[key\]\[field\.key\] = String\(edit\[field\.key\] \?\? fallback\[field\.key\]/);
++  assert.match(course, /for \(const key of datasetRecordKeys\)/);
++  assert.match(course, /recordEdits\?\.\[key\]\?\.knowledge \?\? baseValue/);
++  assert.doesNotMatch(course, /const liveRecords = new Map/);
++  assert.doesNotMatch(course, /Object\.keys\(baseline\.knowledge\).*Object\.keys\(recordEdits/);
++});
+diff --git a/test/course-utils.test.mjs b/test/course-utils.test.mjs
+index 5929bf6..07b92f0 100644
+--- a/test/course-utils.test.mjs
++++ b/test/course-utils.test.mjs
+@@ -98,6 +98,19 @@ test('rejects edits without the matching permission', () => {
+   );
+ });
+ 
++test('rejects an orphaned knowledge change even when knowledge editing is permitted', () => {
++  const key = 'f#g#a#de#en#d#p#u#x.jpg';
++  assert.throws(
++    () => applyContentChanges(
++      { images: [{ name: key }] },
++      { knowledge: [{ key: 'old#record#that#is#not#in#this#dataset.jpg', baseValue: '', value: 'Altlast' }] },
++      [COURSE_PERMISSIONS.KNOWLEDGE]
++    ),
++    (error) => error instanceof ValidationError
++      && error.message === 'Ein Wissenstext verweist auf keinen Datensatz-Eintrag.'
++  );
++});
++
+ test('applies individually permitted animal fields and group assignment', () => {
+   const key = 'Acanthuridae#acanthurus#sohal#arabischer doktorfisch#arabian surgeonfish#20260101#hausriff#autor#sohal.jpg';
+   const result = applyContentChanges(

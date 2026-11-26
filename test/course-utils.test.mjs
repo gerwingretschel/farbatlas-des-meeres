@@ -98,6 +98,19 @@ test('rejects edits without the matching permission', () => {
   );
 });
 
+test('rejects an orphaned knowledge change even when knowledge editing is permitted', () => {
+  const key = 'f#g#a#de#en#d#p#u#x.jpg';
+  assert.throws(
+    () => applyContentChanges(
+      { images: [{ name: key }] },
+      { knowledge: [{ key: 'old#record#that#is#not#in#this#dataset.jpg', baseValue: '', value: 'Altlast' }] },
+      [COURSE_PERMISSIONS.KNOWLEDGE]
+    ),
+    (error) => error instanceof ValidationError
+      && error.message === 'Ein Wissenstext verweist auf keinen Datensatz-Eintrag.'
+  );
+});
+
 test('applies individually permitted animal fields and group assignment', () => {
   const key = 'Acanthuridae#acanthurus#sohal#arabischer doktorfisch#arabian surgeonfish#20260101#hausriff#autor#sohal.jpg';
   const result = applyContentChanges(

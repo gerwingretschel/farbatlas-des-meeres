@@ -27,6 +27,7 @@
   let selectedDataset = '';
   let versionTag = '';
   let baseline = { knowledge: {}, academicLinks: {}, recordFields: {}, groups: {}, effectiveGroups: {} };
+  let datasetRecordKeys = new Set();
   let adminUsers = [];
   let adminDatasets = [];
 
@@ -262,6 +263,7 @@
     selectedDataset = '';
     versionTag = '';
     baseline = { knowledge: {}, academicLinks: {}, recordFields: {}, groups: {}, effectiveGroups: {} };
+    datasetRecordKeys = new Set();
     await clearLocalDatasetCache();
     location.reload();
   }
@@ -271,26 +273,25 @@
     const recordFields = {};
     const groups = {};
     const effectiveGroups = {};
-    const liveRecords = new Map(
-      typeof records !== 'undefined' && Array.isArray(records)
-        ? records.map((record) => [record.name, record])
-        : []
-    );
+    datasetRecordKeys = new Set();
     for (const image of payload.images || []) {
-      const parts = String(image.name || '').split('#');
-      const edit = payload.recordEdits?.[image.name] || {};
-      const live = liveRecords.get(image.name) || {};
+      const key = String(image.name || '');
+      if (!key) continue;
+      datasetRecordKeys.add(key);
+      const parts = key.split('#');
+      const edit = payload.recordEdits?.[key] || {};
       const fallback = {
         family: parts[0] || '', genus: parts[1] || '', species: parts[2] || '',
         de: parts[3] || '', en: parts[4] || '', place: parts[6] || '', author: parts[7] || ''
       };
-      recordFields[image.name] = {};
+      recordFields[key] = {};
       for (const field of RECORD_FIELDS.filter((entry) => entry.key !== 'group')) {
-        recordFields[image.name][field.key] = String(live[field.key] ?? edit[field.key] ?? fallback[field.key] ?? '').trim();
+        recordFields[key][field.key] = String(edit[field.key] ?? fallback[field.key] ?? '').trim();
       }
-      knowledge[image.name] = sanitizeKnowledgeHtml(live.knowledge ?? edit.knowledge ?? '');
-      groups[image.name] = String(payload.groupMoves?.[image.name] || '');
-      effectiveGroups[image.name] = String(live.group || groups[image.name] || '');
+      knowledge[key] = sanitizeKnowledgeHtml(edit.knowledge ?? '');
+      groups[key] = String(payload.groupMoves?.[key] || '');
+      const inferredGroup = typeof group === 'function' ? group(recordFields[key].family) : '';
+      effectiveGroups[key] = String(groups[key] || inferredGroup || '');
     }
     const academicLinks = {};
     for (const [group, value] of Object.entries(payload.savedGroups || {})) {
@@ -364,10 +365,9 @@
     }
 
     if (hasPermission(PERMISSION_KNOWLEDGE)) {
-      const keys = new Set([...Object.keys(baseline.knowledge), ...Object.keys(recordEdits || {})]);
-      for (const key of keys) {
+      for (const key of datasetRecordKeys) {
         const baseValue = baseline.knowledge[key] || '';
-        const value = sanitizeKnowledgeHtml(recordEdits?.[key]?.knowledge || '');
+        const value = sanitizeKnowledgeHtml(recordEdits?.[key]?.knowledge ?? baseValue);
         if (value !== baseValue) knowledge.push({ key, baseValue, value });
       }
     }
