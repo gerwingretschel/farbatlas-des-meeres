@@ -1,0 +1,25 @@
+FARBATLAS – VERIFIKATION KURSLEITER SCHNELLLADEN/TIERDATEN
+Stand: 2026-11-26
+
+Ergebnis:
+- npm run check: BESTANDEN
+- npm test: 56 von 56 Tests BESTANDEN
+- Audit-Maskierungsreste in ausgelieferten Quelldateien: KEINE
+
+Abgedeckte Kernfälle:
+- Kursleiter verwendet den V11-Struktur-/Lazy-Loader.
+- Lazy-Bildabruf akzeptiert die Kursleiter-Sitzung.
+- Zugewiesene Datensätze bleiben serverseitig erzwungen.
+- Alle Tierdatenfelder werden im gemeinsamen Formular angezeigt.
+- Acht Tierdatenfelder plus Wissenstext sind einzeln freigebbar.
+- Nicht freigegebene Felder werden clientseitig gesperrt und serverseitig abgewiesen.
+- Feldänderungen werden konfliktgeprüft, protokolliert und wiederherstellbar gespeichert.
+
+SHA-256:
+17da4fd5d68517d1bbae05261d4014e31aa5fb8c06e2cec0ee71f1abd7363f5e  ./INSTALLATION_KURSLEITER_SCHNELLLADEN_TIERDATEN.md
+ffa0830c61d3347c6321eb9beab3d7afb4f63fad3ed6ff3cf944785064c37b2f  ./course-leader-client.js
+d3c977a92600233f2ed2914f0490f458ad178851914341ed2c8da551b3100f82  ./netlify/functions/farbatlas.mjs
+a566dd27fd8e7b630bb3cb7a154584689de04eea0a6b5e7ca9d1b303ac6ac02d  ./netlify/functions/lib/course-utils.mjs
+a563344b9dda89d6d4a7345239f75b78086b449364e0957b58e2cb20f23d90e6  ./test/course-leader-ui-integration.test.mjs
+9a4ca45561f55da393325b4952ddd2cf0edd2c401a1882e6204f37e23f58a814  ./test/course-utils.test.mjs
+b3e6c92bb009fc2ab40213bdd98ad3bc4324f1945054c1c19b6741d5667b7a86  ./v10-client.js

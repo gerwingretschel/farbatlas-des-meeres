@@ -1,8 +1,27 @@
 import crypto from "node:crypto";
 
 export const COURSE_PERMISSIONS = Object.freeze({
+  FAMILY: "record.family.edit",
+  GENUS: "record.genus.edit",
+  SPECIES: "record.species.edit",
+  GERMAN_NAME: "record.de.edit",
+  ENGLISH_NAME: "record.en.edit",
+  PLACE: "record.place.edit",
+  AUTHOR: "record.author.edit",
+  GROUP: "record.group.edit",
   KNOWLEDGE: "knowledge.edit",
   ACADEMIC_LINKS: "academicLinks.edit",
+});
+
+export const COURSE_RECORD_FIELD_PERMISSIONS = Object.freeze({
+  family: COURSE_PERMISSIONS.FAMILY,
+  genus: COURSE_PERMISSIONS.GENUS,
+  species: COURSE_PERMISSIONS.SPECIES,
+  de: COURSE_PERMISSIONS.GERMAN_NAME,
+  en: COURSE_PERMISSIONS.ENGLISH_NAME,
+  place: COURSE_PERMISSIONS.PLACE,
+  author: COURSE_PERMISSIONS.AUTHOR,
+  group: COURSE_PERMISSIONS.GROUP,
 });
 
 export const DEFAULT_COURSE_PERMISSIONS = Object.freeze([
@@ -213,18 +232,38 @@ function clone(value) {
 export function applyContentChanges(payload, changes, permissions) {
   const permissionSet = new Set(cleanPermissions(permissions));
   const knowledge = Array.isArray(changes?.knowledge) ? changes.knowledge : [];
+  const recordFields = Array.isArray(changes?.recordFields) ? changes.recordFields : [];
   const academicLinks = Array.isArray(changes?.academicLinks) ? changes.academicLinks : [];
-  if (knowledge.length + academicLinks.length > 200) {
+  if (knowledge.length + recordFields.length + academicLinks.length > 200) {
     throw new ValidationError("Pro Speichervorgang sind höchstens 200 Änderungen erlaubt.");
   }
 
   const next = clone(payload || {});
   next.recordEdits ||= {};
+  next.groupMoves ||= {};
   next.savedGroups ||= {};
   const conflicts = [];
   const pending = [];
   const seen = new Set();
   const imageNames = new Set((next.images || []).map((image) => String(image?.name || "")));
+
+  const baseRecord = (key) => {
+    const parts = String(key || "").split("#");
+    return {
+      family: parts[0] || "",
+      genus: parts[1] || "",
+      species: parts[2] || "",
+      de: parts[3] || "",
+      en: parts[4] || "",
+      place: parts[6] || "",
+      author: parts[7] || "",
+    };
+  };
+  const cleanRecordValue = (value) => {
+    const cleaned = String(value ?? "").replaceAll("\0", "").trim();
+    if (cleaned.length > 500) throw new ValidationError("Ein Tierdatenfeld ist zu lang.");
+    return cleaned;
+  };
 
   if (knowledge.length && !permissionSet.has(COURSE_PERMISSIONS.KNOWLEDGE)) {
     throw new ValidationError("Das Recht zum Bearbeiten von Wissenstexten fehlt.", 403);
@@ -243,6 +282,33 @@ export function applyContentChanges(payload, changes, permissions) {
       conflicts.push({ field: "knowledge", key, serverValue: current, proposedValue: proposed });
     } else if (current !== proposed) {
       pending.push({ field: "knowledge", key, before: current, after: proposed });
+    }
+  }
+
+  for (const change of recordFields) {
+    const key = String(change?.key || "");
+    const field = String(change?.field || "");
+    const requiredPermission = COURSE_RECORD_FIELD_PERMISSIONS[field];
+    if (!key || key.length > 600 || !imageNames.has(key)) {
+      throw new ValidationError("Eine Tierdatenänderung verweist auf keinen Datensatz-Eintrag.");
+    }
+    if (!requiredPermission) throw new ValidationError("Unbekanntes Tierdatenfeld.");
+    if (!permissionSet.has(requiredPermission)) {
+      throw new ValidationError("Das Recht zum Bearbeiten dieses Tierdatenfeldes fehlt.", 403);
+    }
+    if (seen.has(`record:${field}:${key}`)) throw new ValidationError("Doppelte Tierdatenänderung.");
+    seen.add(`record:${field}:${key}`);
+
+    const currentRaw = field === "group"
+      ? next.groupMoves[key] || ""
+      : next.recordEdits[key]?.[field] ?? baseRecord(key)[field] ?? "";
+    const current = cleanRecordValue(currentRaw);
+    const base = cleanRecordValue(change.baseValue);
+    const proposed = cleanRecordValue(change.value);
+    if (current !== base) {
+      conflicts.push({ field, key, serverValue: current, proposedValue: proposed });
+    } else if (current !== proposed) {
+      pending.push({ field, key, before: current, after: proposed });
     }
   }
 
@@ -273,7 +339,7 @@ export function applyContentChanges(payload, changes, permissions) {
         ...(next.recordEdits[change.key] || {}),
         knowledge: change.after,
       };
-    } else {
+    } else if (change.field === "academicLink") {
       next.savedGroups[change.key] = {
         icon: "🔬",
         c1: "#68c7c2",
@@ -281,6 +347,14 @@ export function applyContentChanges(payload, changes, permissions) {
         families: [],
         ...(next.savedGroups[change.key] || {}),
         academicUrl: change.after,
+      };
+    } else if (change.field === "group") {
+      if (change.after) next.groupMoves[change.key] = change.after;
+      else delete next.groupMoves[change.key];
+    } else {
+      next.recordEdits[change.key] = {
+        ...(next.recordEdits[change.key] || {}),
+        [change.field]: change.after,
       };
     }
   }

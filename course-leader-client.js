@@ -6,6 +6,17 @@
   const COURSE_PROFILE_KEY = 'farbatlasCourseProfileV1';
   const PERMISSION_KNOWLEDGE = 'knowledge.edit';
   const PERMISSION_ACADEMIC = 'academicLinks.edit';
+  const RECORD_FIELDS = Object.freeze([
+    { key: 'family', permission: 'record.family.edit', label: 'Familie', input: 'editFamily' },
+    { key: 'genus', permission: 'record.genus.edit', label: 'Gattung', input: 'editGenus' },
+    { key: 'species', permission: 'record.species.edit', label: 'Art', input: 'editSpecies' },
+    { key: 'de', permission: 'record.de.edit', label: 'Deutscher Name', input: 'editDe' },
+    { key: 'en', permission: 'record.en.edit', label: 'Englischer Name', input: 'editEn' },
+    { key: 'place', permission: 'record.place.edit', label: 'Fundort', input: 'editPlace' },
+    { key: 'author', permission: 'record.author.edit', label: 'Beschreiber', input: 'editAuthor' },
+    { key: 'group', permission: 'record.group.edit', label: 'Tiergruppe', input: 'targetGroup' },
+  ]);
+  const RECORD_FIELD_BY_KEY = Object.fromEntries(RECORD_FIELDS.map((field) => [field.key, field]));
   const $c = (selector) => document.querySelector(selector);
   const cEsc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -15,7 +26,7 @@
   let courseProfile = null;
   let selectedDataset = '';
   let versionTag = '';
-  let baseline = { knowledge: {}, academicLinks: {} };
+  let baseline = { knowledge: {}, academicLinks: {}, recordFields: {}, groups: {}, effectiveGroups: {} };
   let adminUsers = [];
   let adminDatasets = [];
 
@@ -82,6 +93,9 @@
       body.course-leader-mode:not(.admin-mode) .image-pick,
       body.course-leader-mode:not(.admin-mode) .trash-card,
       body.course-leader-mode:not(.admin-mode) .undo-zone{display:none!important}
+      body.course-leader-mode.course-can-record:not(.admin-mode) .move{display:flex!important}
+      body.course-leader-mode:not(.admin-mode) .course-readonly{background:#eef4f5;color:#52666b;cursor:not-allowed}
+      body.course-leader-mode:not(.admin-mode) .knowledge-editor[contenteditable=false]{background:#eef4f5;color:#52666b}
       @media(max-width:760px){.course-admin-row{grid-template-columns:1fr}.course-version{grid-template-columns:1fr}}
     `;
     document.head.appendChild(style);
@@ -109,7 +123,7 @@
               <button id="courseOpenDataset" class="btn primary">Datensatz öffnen</button>
             </div>
             <div class="course-session-row">
-              <button id="courseSave" class="btn good">Änderungen speichern</button>
+              <button id="courseSave" class="btn good">Datensatz speichern</button>
               <button id="courseHistory" class="btn">Meine Änderungen</button>
               <button id="courseLogout" class="btn bad">Abmelden</button>
             </div>
@@ -171,12 +185,17 @@
     const signedIn = Boolean(courseToken && courseProfile);
     document.body.classList.toggle('course-leader-mode', signedIn);
     document.body.classList.toggle('course-can-academic', signedIn && hasPermission(PERMISSION_ACADEMIC));
+    document.body.classList.toggle('course-can-record', signedIn && (
+      RECORD_FIELDS.some((field) => hasPermission(field.permission)) || hasPermission(PERMISSION_KNOWLEDGE)
+    ));
     $c('#courseLoginView')?.classList.toggle('hidden', signedIn);
     $c('#courseSessionView')?.classList.toggle('hidden', !signedIn);
     if (!signedIn) return;
 
     $c('#courseIdentity').textContent = courseProfile.displayName;
     const labels = [];
+    const editableRecordLabels = RECORD_FIELDS.filter((field) => hasPermission(field.permission)).map((field) => field.label);
+    if (editableRecordLabels.length) labels.push('Tierdaten (' + editableRecordLabels.join(', ') + ')');
     if (hasPermission(PERMISSION_KNOWLEDGE)) labels.push('Wissenstexte');
     if (hasPermission(PERMISSION_ACADEMIC)) labels.push('akademische Links');
     $c('#coursePermissions').textContent = labels.length
@@ -234,7 +253,7 @@
 
   async function logoutCourseLeader() {
     const pending = collectCourseChanges();
-    if ((pending.knowledge.length || pending.academicLinks.length) &&
+    if ((pending.knowledge.length || pending.recordFields.length || pending.academicLinks.length) &&
         !confirm('Es gibt noch nicht serverseitig gespeicherte Änderungen. Wirklich abmelden und lokale Änderungen verwerfen?')) return;
     sessionStorage.removeItem(COURSE_TOKEN_KEY);
     sessionStorage.removeItem(COURSE_PROFILE_KEY);
@@ -242,21 +261,42 @@
     courseProfile = null;
     selectedDataset = '';
     versionTag = '';
-    baseline = { knowledge: {}, academicLinks: {} };
+    baseline = { knowledge: {}, academicLinks: {}, recordFields: {}, groups: {}, effectiveGroups: {} };
     await clearLocalDatasetCache();
     location.reload();
   }
 
   function captureBaseline(payload) {
     const knowledge = {};
+    const recordFields = {};
+    const groups = {};
+    const effectiveGroups = {};
+    const liveRecords = new Map(
+      typeof records !== 'undefined' && Array.isArray(records)
+        ? records.map((record) => [record.name, record])
+        : []
+    );
     for (const image of payload.images || []) {
-      knowledge[image.name] = sanitizeKnowledgeHtml(payload.recordEdits?.[image.name]?.knowledge || '');
+      const parts = String(image.name || '').split('#');
+      const edit = payload.recordEdits?.[image.name] || {};
+      const live = liveRecords.get(image.name) || {};
+      const fallback = {
+        family: parts[0] || '', genus: parts[1] || '', species: parts[2] || '',
+        de: parts[3] || '', en: parts[4] || '', place: parts[6] || '', author: parts[7] || ''
+      };
+      recordFields[image.name] = {};
+      for (const field of RECORD_FIELDS.filter((entry) => entry.key !== 'group')) {
+        recordFields[image.name][field.key] = String(live[field.key] ?? edit[field.key] ?? fallback[field.key] ?? '').trim();
+      }
+      knowledge[image.name] = sanitizeKnowledgeHtml(live.knowledge ?? edit.knowledge ?? '');
+      groups[image.name] = String(payload.groupMoves?.[image.name] || '');
+      effectiveGroups[image.name] = String(live.group || groups[image.name] || '');
     }
     const academicLinks = {};
     for (const [group, value] of Object.entries(payload.savedGroups || {})) {
       academicLinks[group] = safeKnowledgeUrl(value?.academicUrl || '') || '';
     }
-    baseline = { knowledge, academicLinks };
+    baseline = { knowledge, academicLinks, recordFields, groups, effectiveGroups };
   }
 
   async function openCourseDataset() {
@@ -269,23 +309,28 @@
       setStatus('Datensatz wird geladen …');
       const result = await request('load', { name });
       const payload = result.payload || {};
-      captureBaseline(payload);
-      const images = [];
-      for (let index = 0; index < (payload.images || []).length; index += 1) {
-        const image = payload.images[index];
-        setStatus(`Bild ${index + 1} von ${payload.images.length} wird geladen …`);
-        if (image.src) {
-          images.push(image);
-        } else if (image.imageKey) {
-          const loaded = await request('get-image', { name, imageKey: image.imageKey });
-          images.push({ ...image, src: `data:${loaded.type};base64,${loaded.data}` });
+      if (window.FarbatlasRuntime?.applyDatasetPayload) {
+        window.FarbatlasRuntime.applyDatasetPayload(payload, result.name, result.versionTag || '');
+      } else {
+        const images = [];
+        for (let index = 0; index < (payload.images || []).length; index += 1) {
+          const image = payload.images[index];
+          setStatus(`Bild ${index + 1} von ${payload.images.length} wird geladen …`);
+          if (image.src) images.push(image);
+          else if (image.imageKey) {
+            const loaded = await request('get-image', { name, imageKey: image.imageKey });
+            images.push({ ...image, src: `data:${loaded.type};base64,${loaded.data}` });
+          }
         }
+        loadDatasetPayload({ ...payload, images }, result.name);
       }
-      loadDatasetPayload({ ...payload, images }, result.name);
       selectedDataset = result.name;
       versionTag = result.versionTag || '';
+      captureBaseline(payload);
       $c('#courseSave').disabled = !(
-        hasPermission(PERMISSION_KNOWLEDGE) || hasPermission(PERMISSION_ACADEMIC)
+        hasPermission(PERMISSION_KNOWLEDGE)
+        || hasPermission(PERMISSION_ACADEMIC)
+        || RECORD_FIELDS.some((field) => hasPermission(field.permission))
       );
       setStatus(`Datensatz „${result.name}“ wurde geöffnet.`, 'success');
     } catch (error) {
@@ -297,8 +342,26 @@
 
   function collectCourseChanges() {
     const knowledge = [];
+    const recordFields = [];
     const academicLinks = [];
-    if (!selectedDataset) return { knowledge, academicLinks };
+    if (!selectedDataset) return { knowledge, recordFields, academicLinks };
+
+    for (const [key, initial] of Object.entries(baseline.recordFields || {})) {
+      for (const field of RECORD_FIELDS.filter((entry) => entry.key !== 'group')) {
+        if (!hasPermission(field.permission)) continue;
+        const baseValue = initial[field.key] || '';
+        const value = String(recordEdits?.[key]?.[field.key] ?? baseValue).trim();
+        if (value !== baseValue) recordFields.push({ key, field: field.key, baseValue, value });
+      }
+      const groupField = RECORD_FIELD_BY_KEY.group;
+      if (hasPermission(groupField.permission)) {
+        const initialEffective = baseline.effectiveGroups?.[key] || '';
+        const value = String(groupMoves?.[key] ?? initialEffective).trim();
+        if (value !== initialEffective) {
+          recordFields.push({ key, field: 'group', baseValue: baseline.groups?.[key] || '', value });
+        }
+      }
+    }
 
     if (hasPermission(PERMISSION_KNOWLEDGE)) {
       const keys = new Set([...Object.keys(baseline.knowledge), ...Object.keys(recordEdits || {})]);
@@ -316,11 +379,20 @@
         if (value !== baseValue) academicLinks.push({ key, baseValue, value });
       }
     }
-    return { knowledge, academicLinks };
+    return { knowledge, recordFields, academicLinks };
   }
 
   function acceptSavedChanges(changes) {
     for (const change of changes.knowledge || []) baseline.knowledge[change.key] = change.value;
+    for (const change of changes.recordFields || []) {
+      if (change.field === 'group') {
+        baseline.groups[change.key] = change.value;
+        baseline.effectiveGroups[change.key] = change.value;
+      } else {
+        baseline.recordFields[change.key] ||= {};
+        baseline.recordFields[change.key][change.field] = change.value;
+      }
+    }
     for (const change of changes.academicLinks || []) baseline.academicLinks[change.key] = change.value;
   }
 
@@ -330,7 +402,7 @@
       return;
     }
     const changes = collectCourseChanges();
-    const count = changes.knowledge.length + changes.academicLinks.length;
+    const count = changes.knowledge.length + changes.recordFields.length + changes.academicLinks.length;
     if (!count) {
       setStatus('Keine neuen Änderungen vorhanden.');
       return;
@@ -370,7 +442,7 @@
         ...(recordEdits[conflict.key] || {}),
         knowledge: sanitizeKnowledgeHtml(value || '')
       };
-    } else {
+    } else if (conflict.field === 'academicLink') {
       const group = conflict.key;
       const current = savedGroups[group] || {};
       const fallback = GROUPS[group] || ['🔬', '#68c7c2', '#357b8c', []];
@@ -382,13 +454,27 @@
         ...current,
         academicUrl: value || ''
       };
+    } else if (conflict.field === 'group') {
+      if (value) groupMoves[conflict.key] = value;
+      else delete groupMoves[conflict.key];
+    } else if (RECORD_FIELD_BY_KEY[conflict.field]) {
+      recordEdits[conflict.key] = {
+        ...(recordEdits[conflict.key] || {}),
+        [conflict.field]: String(value ?? '')
+      };
     }
+  }
+
+  function changeLabel(field) {
+    if (field === 'knowledge') return 'Wissenstext';
+    if (field === 'academicLink') return 'Akademischer Link';
+    return RECORD_FIELD_BY_KEY[field]?.label || field;
   }
 
   function showConflictDialog(conflicts) {
     const rows = conflicts.map((conflict, index) => `
       <div class="course-conflict" data-conflict="${index}">
-        <b>${conflict.field === 'knowledge' ? 'Wissenstext' : 'Akademischer Link'}: ${cEsc(conflict.key)}</b>
+        <b>${cEsc(changeLabel(conflict.field))}: ${cEsc(conflict.key)}</b>
         <div class="course-version">
           <div><strong>Serverfassung</strong><pre>${cEsc(conflict.serverValue || '(leer)')}</pre></div>
           <div><strong>Eigene Fassung</strong><pre>${cEsc(conflict.proposedValue || '(leer)')}</pre></div>
@@ -415,7 +501,14 @@
       }
       conflicts.forEach((conflict, index) => {
         if (conflict.field === 'knowledge') baseline.knowledge[conflict.key] = conflict.serverValue || '';
-        else baseline.academicLinks[conflict.key] = conflict.serverValue || '';
+        else if (conflict.field === 'academicLink') baseline.academicLinks[conflict.key] = conflict.serverValue || '';
+        else if (conflict.field === 'group') {
+          baseline.groups[conflict.key] = conflict.serverValue || '';
+          baseline.effectiveGroups[conflict.key] = conflict.serverValue || baseline.effectiveGroups[conflict.key] || '';
+        } else {
+          baseline.recordFields[conflict.key] ||= {};
+          baseline.recordFields[conflict.key][conflict.field] = conflict.serverValue || '';
+        }
         if (choices[index] === 'server') setLocalConflictValue(conflict, conflict.serverValue || '');
       });
       saveGroupSettings();
@@ -424,6 +517,53 @@
       await saveCourseChanges();
     };
     setStatus('Konflikt erkannt: Bitte beide Fassungen vergleichen.', 'error');
+  }
+
+  function openCourseRecordEditor(record) {
+    if (!record || !selectedDataset) return;
+    const can = (key) => hasPermission(RECORD_FIELD_BY_KEY[key]?.permission);
+    const input = (field, wide = false) => {
+      const editable = can(field.key);
+      return `<div class="${wide ? 'wide' : ''}"><label>${cEsc(field.label)}</label><input id="${field.input}" value="${cEsc(record[field.key] || '')}" ${editable ? '' : 'disabled'} class="${editable ? '' : 'course-readonly'}"></div>`;
+    };
+    const standardFields = RECORD_FIELDS.filter((field) => !['group', 'author'].includes(field.key));
+    const canKnowledge = hasPermission(PERMISSION_KNOWLEDGE);
+    const canGroup = can('group');
+    const anyEditable = canKnowledge || RECORD_FIELDS.some((field) => can(field.key));
+    const names = Object.keys(GROUPS || {}).sort((a, b) => a.localeCompare(b, 'de'));
+    const currentGroup = record.group || '';
+    $c('#modalContent').innerHTML = `<div class="formbox"><h2>Tierdaten bearbeiten</h2>
+      <div class="edit-grid">
+        ${standardFields.map((field) => input(field)).join('')}
+        ${input(RECORD_FIELD_BY_KEY.author, true)}
+        <div class="wide"><label>Wissen zur Spezies</label>
+          ${canKnowledge ? '<div class="knowledge-toolbar"><button id="insertKnowledgeLink" class="link-tool hidden" type="button" title="Link für markierten Text einfügen">🔗</button><div id="knowledgeLinkInputs" class="link-inputs hidden"><input id="knowledgeLinkUrl" type="url" placeholder="https://…"><button id="applyKnowledgeLink" class="btn primary" type="button">Link einsetzen</button><button id="cancelKnowledgeLink" class="btn" type="button">Abbrechen</button></div></div>' : ''}
+          <div id="editKnowledge" class="knowledge-editor ${canKnowledge ? '' : 'course-readonly'}" contenteditable="${canKnowledge ? 'true' : 'false'}" role="textbox" aria-multiline="true">${sanitizeKnowledgeHtml(record.knowledge || '')}</div>
+          <div class="knowledge-hint">${canKnowledge ? 'Der Wissenstext kann bearbeitet und anschließend mit „Datensatz speichern“ serverseitig gespeichert werden.' : 'Dieses Feld ist sichtbar, aber vom Administrator nicht zur Bearbeitung freigegeben.'}</div>
+        </div>
+        <div class="wide"><label>Tiergruppe</label><select id="targetGroup" ${canGroup ? '' : 'disabled'} class="${canGroup ? '' : 'course-readonly'}">
+          ${names.map((group) => `<option ${group === currentGroup ? 'selected' : ''}>${cEsc(group)}</option>`).join('')}
+        </select></div>
+      </div>
+      <div class="form-actions"><button class="btn" id="cancelCourseRecord">${anyEditable ? 'Abbrechen' : 'Schließen'}</button>${anyEditable ? '<button class="btn primary" id="saveCourseRecord">Lokal übernehmen</button>' : ''}</div>
+    </div>`;
+    $c('#modal').classList.remove('hidden');
+    if (canKnowledge) setupKnowledgeEditor();
+    $c('#cancelCourseRecord').onclick = () => $c('#modal').classList.add('hidden');
+    if (!anyEditable) return;
+    $c('#saveCourseRecord').onclick = () => {
+      const next = { ...(recordEdits[record.name] || {}) };
+      for (const field of RECORD_FIELDS.filter((entry) => entry.key !== 'group')) {
+        if (can(field.key)) next[field.key] = $c('#' + field.input).value.trim();
+      }
+      if (canKnowledge) next.knowledge = sanitizeKnowledgeHtml($c('#editKnowledge').innerHTML);
+      recordEdits[record.name] = next;
+      if (canGroup) groupMoves[record.name] = $c('#targetGroup').value;
+      saveGroupSettings();
+      rebuild();
+      $c('#modal').classList.add('hidden');
+      setStatus('Tierdaten lokal vorbereitet. Bitte anschließend „Datensatz speichern“ wählen.');
+    };
   }
 
   function openCourseKnowledge(record) {
@@ -491,8 +631,15 @@
     if (typeof openKnowledge === 'function') {
       const originalKnowledge = openKnowledge;
       openKnowledge = (record) => {
-        if (courseToken && courseProfile) return openCourseKnowledge(record);
+        if (courseToken && courseProfile) return openCourseRecordEditor(record);
         return originalKnowledge(record);
+      };
+    }
+    if (typeof openGroupAssignment === 'function') {
+      const originalRecordEditor = openGroupAssignment;
+      openGroupAssignment = (record) => {
+        if (courseToken && courseProfile) return openCourseRecordEditor(record);
+        return originalRecordEditor(record);
       };
     }
     if (typeof openRenameGroup === 'function') {
@@ -516,7 +663,7 @@
       const html = entries.length ? entries.map((entry) => {
         const changes = (entry.changes || []).map((change, index) => `
           <div class="course-history-entry">
-            <b>${change.field === 'knowledge' ? 'Wissenstext' : 'Akademischer Link'}: ${cEsc(change.key)}</b>
+            <b>${cEsc(changeLabel(change.field))}: ${cEsc(change.key)}</b>
             <div class="course-version"><div><strong>Vorher</strong><pre>${cEsc(change.before || '(leer)')}</pre></div><div><strong>Nachher</strong><pre>${cEsc(change.after || '(leer)')}</pre></div></div>
             <button class="btn" data-restore-key="${cEsc(entry.key)}" data-restore-index="${index}">Vorherige Version wiederherstellen</button>
           </div>`).join('');
@@ -610,6 +757,7 @@
       <label><input id="courseFormActive" type="checkbox" ${user?.active === false ? '' : 'checked'}> Konto aktiv</label>
       <label>Gültig bis (optional)<input id="courseFormExpires" type="datetime-local" value="${cEsc(toLocalDateTime(user?.expiresAt))}"></label></div>
       <fieldset class="course-fieldset"><legend>Einzelrechte</legend>
+      ${RECORD_FIELDS.map((field) => `<label><input data-course-record-permission="${cEsc(field.permission)}" type="checkbox" ${(user?.permissions || []).includes(field.permission) ? 'checked' : ''}> ${cEsc(field.label)} bearbeiten</label>`).join('')}
       <label><input id="coursePermKnowledge" type="checkbox" ${(user?.permissions || [PERMISSION_KNOWLEDGE]).includes(PERMISSION_KNOWLEDGE) ? 'checked' : ''}> Wissenstexte bearbeiten</label>
       <label><input id="coursePermAcademic" type="checkbox" ${(user?.permissions || [PERMISSION_ACADEMIC]).includes(PERMISSION_ACADEMIC) ? 'checked' : ''}> Akademische Links bearbeiten</label></fieldset>
       <fieldset class="course-fieldset"><legend>Zugewiesene Datensätze</legend>${datasets}</fieldset>
@@ -619,6 +767,7 @@
     $c('#cancelCourseForm').onclick = () => $c('#modal').classList.add('hidden');
     $c('#saveCourseForm').onclick = async () => {
       const permissions = [];
+      document.querySelectorAll('[data-course-record-permission]:checked').forEach((input) => permissions.push(input.dataset.courseRecordPermission));
       if ($c('#coursePermKnowledge').checked) permissions.push(PERMISSION_KNOWLEDGE);
       if ($c('#coursePermAcademic').checked) permissions.push(PERMISSION_ACADEMIC);
       const expiresRaw = $c('#courseFormExpires').value;
@@ -681,7 +830,7 @@
           const result = await request('list-audit', { name: $c('#auditDataset').value, limit: 100 }, 'admin');
           box.innerHTML = (result.entries || []).length ? result.entries.map((entry) => `
             <div class="course-history-entry"><b>${cEsc(entry.actor?.displayName || entry.actor?.username || 'Unbekannt')}</b> · ${cEsc(entry.dataset)}<div class="course-admin-meta">${cEsc(new Date(entry.at).toLocaleString('de-DE'))} · ${(entry.changes || []).length} Änderung(en)</div>
-            ${(entry.changes || []).map((change) => `<div><strong>${change.field === 'knowledge' ? 'Wissen' : 'Link'}: ${cEsc(change.key)}</strong><div class="course-version"><div><span>Vorher</span><pre>${cEsc(change.before || '(leer)')}</pre></div><div><span>Nachher</span><pre>${cEsc(change.after || '(leer)')}</pre></div></div></div>`).join('')}</div>
+            ${(entry.changes || []).map((change) => `<div><strong>${cEsc(changeLabel(change.field))}: ${cEsc(change.key)}</strong><div class="course-version"><div><span>Vorher</span><pre>${cEsc(change.before || '(leer)')}</pre></div><div><span>Nachher</span><pre>${cEsc(change.after || '(leer)')}</pre></div></div></div>`).join('')}</div>
           `).join('') : '<div class="empty">Keine Protokolleinträge gefunden.</div>';
         } catch (error) {
           box.innerHTML = `<div class="course-warning">${cEsc(error.message)}</div>`;
@@ -719,7 +868,7 @@
     HELP_CHAPTERS.push({
       id: 'course-leader',
       title: '10. Kursleiter-Arbeitsversion',
-      text: 'Kursleiter melden sich im grünen Bereich an, öffnen ausschließlich zugewiesene Datensätze und bearbeiten nur freigeschaltete Wissenstexte oder akademische Links. Lokale Änderungen werden mit „Änderungen speichern“ geprüft, versioniert und protokolliert. Bei parallelen Änderungen müssen beide Fassungen verglichen werden.'
+      text: 'Kursleiter melden sich im grünen Bereich an und öffnen ausschließlich zugewiesene Datensätze mit derselben Schnellladefunktion wie der Administrator. Das Bearbeiten-Symbol öffnet alle Tierdaten; änderbar sind nur die vom Administrator einzeln freigegebenen Felder. Lokale Änderungen werden mit „Datensatz speichern“ geprüft, versioniert und protokolliert. Bei parallelen Änderungen müssen beide Fassungen verglichen werden.'
     });
   }
 

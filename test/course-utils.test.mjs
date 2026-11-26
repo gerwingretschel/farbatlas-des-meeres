@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   COURSE_PERMISSIONS,
+  COURSE_RECORD_FIELD_PERMISSIONS,
   ValidationError,
   applyContentChanges,
   createPasswordRecord,
@@ -95,4 +96,56 @@ test('rejects edits without the matching permission', () => {
     ),
     (error) => error instanceof ValidationError && error.status === 403
   );
+});
+
+test('applies individually permitted animal fields and group assignment', () => {
+  const key = 'Acanthuridae#acanthurus#sohal#arabischer doktorfisch#arabian surgeonfish#20260101#hausriff#autor#sohal.jpg';
+  const result = applyContentChanges(
+    {
+      images: [{ name: key, imageKey: 'img-1' }],
+      recordEdits: {},
+      groupMoves: {},
+    },
+    {
+      recordFields: [
+        { key, field: 'de', baseValue: 'arabischer doktorfisch', value: 'Arabischer Doktorfisch' },
+        { key, field: 'place', baseValue: 'hausriff', value: 'Hausriff Süd' },
+        { key, field: 'group', baseValue: '', value: 'Fische' },
+      ],
+    },
+    [
+      COURSE_RECORD_FIELD_PERMISSIONS.de,
+      COURSE_RECORD_FIELD_PERMISSIONS.place,
+      COURSE_RECORD_FIELD_PERMISSIONS.group,
+    ]
+  );
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(result.payload.recordEdits[key].de, 'Arabischer Doktorfisch');
+  assert.equal(result.payload.recordEdits[key].place, 'Hausriff Süd');
+  assert.equal(result.payload.groupMoves[key], 'Fische');
+  assert.deepEqual(result.auditChanges.map((change) => change.field), ['de', 'place', 'group']);
+});
+
+test('rejects an animal field that was not assigned by the administrator', () => {
+  const key = 'f#g#a#de#en#20260101#place#author#image.jpg';
+  assert.throws(
+    () => applyContentChanges(
+      { images: [{ name: key }] },
+      { recordFields: [{ key, field: 'author', baseValue: 'author', value: 'changed' }] },
+      [COURSE_RECORD_FIELD_PERMISSIONS.de]
+    ),
+    (error) => error instanceof ValidationError && error.status === 403
+  );
+});
+
+test('detects concurrent animal-field changes', () => {
+  const key = 'f#g#a#Alt#en#20260101#place#author#image.jpg';
+  const result = applyContentChanges(
+    { images: [{ name: key }], recordEdits: { [key]: { de: 'Serverfassung' } } },
+    { recordFields: [{ key, field: 'de', baseValue: 'Alt', value: 'Eigene Fassung' }] },
+    [COURSE_RECORD_FIELD_PERMISSIONS.de]
+  );
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(result.conflicts[0].field, 'de');
+  assert.equal(result.conflicts[0].serverValue, 'Serverfassung');
 });

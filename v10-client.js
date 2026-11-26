@@ -43,7 +43,9 @@
   let dataSaver = typeof localStorage !== 'undefined' && localStorage.getItem(DATA_SAVER_KEY) === '1';
 
   function activeToken() {
-    return sessionStorage.getItem('farbatlasAdminTokenV09') || (typeof adminToken === 'undefined' ? '' : String(adminToken || ''));
+    return sessionStorage.getItem('farbatlasCourseTokenV1')
+      || sessionStorage.getItem('farbatlasAdminTokenV09')
+      || (typeof adminToken === 'undefined' ? '' : String(adminToken || ''));
   }
 
   function serverResponseProblem(response, text) {
@@ -599,12 +601,29 @@
       loadTeachingImage: async (recordOrName, options = {}) => assetUrl(itemFor(recordOrName), 'teaching', options),
       ensureTeachingImages: hydrateAllTeachingImages,
       getDataSaver: () => dataSaver,
+      applyDatasetPayload,
     });
     if (typeof updateDatasetIndicator === 'function') updateDatasetIndicator(dataSaver ? 'Datensparmodus' : 'Vorschaubilder werden bei Bedarf geladen');
     if (datasetLoaded && typeof scheduleDatasetCache === 'function') scheduleDatasetCache();
     window.dispatchEvent(new CustomEvent('farbatlas:dataset-changed', {
       detail: { name: session.name, loaded: datasetLoaded, imageCount: Array.isArray(imported) ? imported.length : 0 }
     }));
+  }
+
+  function applyDatasetPayload(payload, name, versionTag = '') {
+    applyPayload(payload || {}, name, versionTag);
+    installLazyImages();
+    showOfflineManifest();
+    return { name: session.name, versionTag: session.versionTag };
+  }
+
+  function exposeRuntimeBridge() {
+    window.FarbatlasRuntime ||= {};
+    Object.assign(window.FarbatlasRuntime, {
+      version: VERSION,
+      applyDatasetPayload,
+      getDataSaver: () => dataSaver,
+    });
   }
 
   async function saveV11(create) {
@@ -1161,6 +1180,7 @@
   }
 
   function bind() {
+    exposeRuntimeBridge();
     installGlobalBridges();
     installUi();
     const createButton = q('#newDatasetBtn');
