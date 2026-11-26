@@ -14,6 +14,8 @@
   const OFFLINE_DB = 'farbatlas-offline-library-v1';
   const OFFLINE_STORE = 'assets';
   const MANIFEST_STORE = 'manifests';
+  const THUMBNAIL_PREFETCH_NEXT = 5;
+  const THUMBNAIL_PREFETCH_PREVIOUS = 2;
   const PLACEHOLDER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480"><rect width="480" height="480" fill="#dceef1"/><path d="M95 325l82-91 67 67 45-49 96 103H95z" fill="#8bbec6"/><circle cx="325" cy="145" r="42" fill="#acd5da"/><text x="240" y="410" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" fill="#376b74">Vorschaubild wird geladen</text></svg>'
   );
@@ -32,6 +34,7 @@
   const inflight = new Map();
   const observedImages = new WeakSet();
   let galleryGeneration = 0;
+  let thumbnailPrefetchGeneration = 0;
   let importPreparation = null;
   let dataSaver = typeof localStorage !== 'undefined' && localStorage.getItem(DATA_SAVER_KEY) === '1';
 
@@ -446,6 +449,42 @@
     }
   }
 
+  function thumbnailPrefetchIndexes(length, currentIndex, next = THUMBNAIL_PREFETCH_NEXT, previous = THUMBNAIL_PREFETCH_PREVIOUS) {
+    const total = Math.max(0, Number(length) || 0);
+    const current = Number(currentIndex);
+    if (!Number.isInteger(current) || current < 0 || current >= total) return [];
+    const indexes = [current];
+    for (let offset = 1; offset <= next && current + offset < total; offset += 1) indexes.push(current + offset);
+    for (let offset = 1; offset <= previous && current - offset >= 0; offset += 1) indexes.push(current - offset);
+    return indexes;
+  }
+
+  function scheduleThumbnailPrefetch(referenceRecords, currentIndex) {
+    const generation = ++thumbnailPrefetchGeneration;
+    const selected = thumbnailPrefetchIndexes(referenceRecords?.length || 0, currentIndex)
+      .map((index) => itemFor(referenceRecords[index]))
+      .filter((item) => item && (item.thumbnailKey || item.thumbnailBlob || item.thumbnailSrc));
+    const run = async () => {
+      for (const item of selected) {
+        if (generation !== thumbnailPrefetchGeneration) return;
+        try {
+          // Deliberately restricted to thumbnails: teaching images remain request-only.
+          await assetBlob(item, 'thumbnail');
+        } catch {
+          // A missing thumbnail must not trigger a teaching-image fallback in the prefetch path.
+        }
+      }
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(() => run(), { timeout: 1200 });
+    else if (typeof setTimeout === 'function') setTimeout(run, 0);
+  }
+
+  window.FarbatlasThumbnailPrefetch = Object.freeze({
+    indexes: thumbnailPrefetchIndexes,
+    next: THUMBNAIL_PREFETCH_NEXT,
+    previous: THUMBNAIL_PREFETCH_PREVIOUS,
+  });
+
   const observer = typeof IntersectionObserver === 'function'
     ? new IntersectionObserver((entries) => entries.forEach((entry) => {
       if (!entry.isIntersecting) return;
@@ -517,6 +556,7 @@
         const record = gallerySet?.[galleryIndex];
         const item = itemFor(record);
         if (!record || !item?.imageKey) return originalRender();
+        scheduleThumbnailPrefetch(gallerySet, galleryIndex);
         let thumbnail = record.src;
         try { thumbnail = await assetUrl(item, 'thumbnail'); } catch { /* thumbnail remains placeholder */ }
         if (generation !== galleryGeneration) return;

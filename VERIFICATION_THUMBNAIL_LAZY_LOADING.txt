@@ -3,7 +3,7 @@ Stand: 2026-11-26
 
 ERGEBNIS
 - node --check: erfolgreich
-- node --test: 27 bestanden, 0 fehlgeschlagen
+- node --test: 30 bestanden, 0 fehlgeschlagen
 - node inject-v10.mjs: erfolgreich
 
 ABGEDECKTE SICHERHEITSREGELN
@@ -15,6 +15,9 @@ ABGEDECKTE SICHERHEITSREGELN
 - Thumbnail-Verwaltung schreibt ausschließlich den Thumbnail-Schlüssel; das Unterrichtsbild wird nur gelesen.
 - Änderung eines Unterrichtsbilds markiert ein vorhandenes Vorschaubild als veraltet.
 - Lazy Loading verwendet IntersectionObserver.
+- Beim Anzeigen eines Referenzbilds wird exakt das Thumbnail-Fenster „aktuell + 5 nächste + 2 vorherige“ im Hintergrund vorbereitet.
+- Das Vorladefenster wird an Serienanfang und -ende begrenzt und enthält keine Duplikate.
+- Der Vorladepfad ruft ausschließlich `thumbnail` ab und besitzt keinen Unterrichtsbild-Fallback.
 - Datensparmodus verlangt eine bewusste Aktion vor dem Laden des Unterrichtsbilds.
 - Offline-Vorbereitung bietet Vorschaubild- und Komplettstufe.
 - Neuer Import erzeugt und überträgt Unterrichtsbild und Vorschaubild als Paar.
@@ -30,6 +33,7 @@ NOCH IM ECHTEN BRANCH-DEPLOY ZU PRÜFEN
 - Netlify Blobs mit dem produktionsnahen Datensatz „Rotes Meer“.
 - Erzeugung des vollständigen Thumbnail-Bestands.
 - Übertragungsvolumen und Startzeit vorher/nachher.
+- Netzwerkprüfung des Thumbnail-Fensters sowie Nachweis, dass keine benachbarten Unterrichtsbilder vorgeladen werden.
 - Mobile Darstellung und langsame Verbindung.
 - Beide Offline-Stufen auf demselben Gerät/Browser.
 - Stichproben der bestehenden Unterrichtsbilder.

@@ -20,23 +20,30 @@ Stand: 26. November 2026
    - Vorschaubilder werden erst geladen, wenn eine Bildkarte sichtbar wird oder kurz davor ist.
    - Suche, Atlas und Lernmodus verwenden Vorschaubilder.
 
-3. **Unterrichtsbild auf Anforderung**
+3. **Vorausschauendes Laden beim Blättern**
+   - Sobald ein Referenzbild in der Galerie angezeigt wird, wird ein eng begrenztes Thumbnail-Fenster im Hintergrund vorbereitet.
+   - Reihenfolge und Umfang: aktuelles Vorschaubild, die nächsten fünf und die vorherigen zwei Vorschaubilder.
+   - An Anfang und Ende einer Bildserie wird das Fenster automatisch gekürzt; es gibt keine doppelten Abrufe.
+   - Der Vorgang beginnt erst beim Anzeigen eines Referenzbilds und verändert daher das schnelle Öffnen des Datensatzes nicht.
+   - Dieser Hintergrundpfad darf ausschließlich Vorschaubilder abrufen. Fehlende Vorschaubilder lösen insbesondere keinen Abruf eines Unterrichtsbilds aus.
+
+4. **Unterrichtsbild auf Anforderung**
    - Im Normalmodus wird das Unterrichtsbild beim Öffnen der Detail-/Vollbildansicht geladen.
    - Im Datensparmodus erscheint vorher eine bewusste Schaltfläche mit der ungefähren Datenmenge.
 
-4. **Admin-Verwaltung der Vorschaubilder**
+5. **Admin-Verwaltung der Vorschaubilder**
    - Bibliothek prüfen.
    - Fehlende, veraltete und beschädigte Vorschaubilder erkennen.
    - Vorschaubilder stapelweise erzeugen oder erneuern.
    - Komprimierung bzw. Wiederherstellung eines Unterrichtsbilds markiert das zugehörige Vorschaubild als veraltet.
 
-5. **Offline-Vorbereitung**
+6. **Offline-Vorbereitung**
    - Datensparend: Texte und alle Vorschaubilder.
    - Komplett: zusätzlich alle Unterrichtsbilder.
    - Fortschritt, Abschlussmeldung und leicht verständliche Hinweise ohne technischen Fachbegriff „Browsercache“.
    - Die App-Grunddateien werden durch einen Service Worker für einen späteren Offline-Start vorbereitet.
 
-6. **Eigene Fotos ohne Internet**
+7. **Eigene Fotos ohne Internet**
    - Neue Fotos werden lokal als Unterrichtsbild und Vorschaubild vorbereitet.
    - Sie werden deutlich als „noch nicht übertragen“ angezeigt.
    - Nach Wiederherstellung der Verbindung muss derselbe Datensatz gespeichert und die Erfolgsmeldung abgewartet werden.
@@ -52,15 +59,16 @@ Stand: 26. November 2026
 - `test/image-compression-integration.test.mjs` – Regressionstest: Öffnen lädt nur Metadaten.
 - `test/thumbnail-utils.test.mjs` – Grenzwert- und Statusprüfungen.
 - `test/thumbnail-integration.test.mjs` – Integrations- und Sicherheitsprüfungen.
+- `test/thumbnail-prefetch.test.mjs` – exakte Fenstergröße, Randfälle und Ausschluss von Unterrichtsbildern beim Vorladen.
 
-## Installation auf dem vorbereiteten Branch
+## Aktualisierung auf dem bestehenden Branch
 
-Der aktive Branch muss `feature/thumbnail-lazy-loading` sein und vor dem Kopieren **0 changed files** anzeigen.
+Der aktive Branch muss `feature/thumbnail-lazy-loading` sein. Bereits umgesetzte Dateien des ersten Thumbnail-Pakets bleiben die Grundlage dieser Aktualisierung.
 
 1. ZIP-Datei entpacken.
 2. Den Inhalt des Ordners `farbatlas-thumbnail-lazy-loading` in die Projektwurzel `farbatlas-des-meeres` kopieren.
 3. Vorhandene Dateien ersetzen; neue Dateien und Unterordner übernehmen.
-4. In GitHub Desktop kontrollieren, dass ausschließlich die oben genannten Projektdateien sowie diese Dokumentation/Testdateien geändert oder neu sind.
+4. In GitHub Desktop kontrollieren. Für diese Erweiterung müssen insbesondere `v10-client.js`, diese Dokumentation, die Verifikationsdatei und der neue Test `test/thumbnail-prefetch.test.mjs` erscheinen.
 5. Noch nicht nach `main` mergen.
 
 ## Lokale Prüfung
@@ -77,13 +85,13 @@ npm run build
 Erwartung:
 
 - Syntaxprüfung ohne Fehler.
-- 27 Tests bestanden, 0 fehlgeschlagen.
+- 30 Tests bestanden, 0 fehlgeschlagen.
 - Build erfolgreich.
 
 Danach in GitHub Desktop committen:
 
 ```text
-Thumbnail, Lazy Loading und Offline-Bibliothek
+Vorausschauendes Laden der Vorschaubilder
 ```
 
 Anschließend `Push origin` ausführen. Erst den separaten Netlify-Branch-Deploy prüfen.
@@ -93,12 +101,14 @@ Anschließend `Push origin` ausführen. Erst den separaten Netlify-Branch-Deploy
 1. **Rotes Meer öffnen:** Der Atlas muss nach Laden der Struktur schnell nutzbar sein; es darf keine Startschleife mit 201 Unterrichtsbildern mehr erscheinen.
 2. **Admin → Vorschaubilder:** Bibliothek prüfen und anschließend alle fehlenden/veralteten Vorschaubilder erzeugen. Abschlusserwartung: alle vorhandenen Unterrichtsbilder haben ein aktuelles Vorschaubild.
 3. **Neu öffnen:** Nur sichtbare Vorschaubilder sollen beim Blättern/Scrollen nachgeladen werden.
-4. **Normalmodus:** Detailansicht öffnen; genau das gewählte Unterrichtsbild soll geladen werden.
-5. **Datensparmodus:** Detailansicht öffnen; das Unterrichtsbild darf erst nach Klick auf „Großes Unterrichtsbild laden“ übertragen werden.
-6. **Importtest:** Ein großes Smartphonefoto importieren und speichern. Danach müssen Unterrichtsbild und Vorschaubild vorhanden sein; das Original darf nicht als dritte Serverdatei gespeichert werden.
-7. **Offline datensparend:** Vorbereitung bis zur Abschlussmeldung laufen lassen, Verbindung trennen, Atlas/Thumbnails/Texte prüfen.
-8. **Offline komplett:** Mit einer kleinen Testbibliothek zusätzlich Detailbilder vorbereiten und offline öffnen.
-9. **Offline-Foto:** Verbindung trennen, Foto importieren, Hinweis „nur auf diesem Gerät“ prüfen, Verbindung wiederherstellen und Datensatz bis zur Erfolgsmeldung speichern.
-10. **Bestehende Unterrichtsbilder:** Stichproben in der Detailansicht prüfen. Die Thumbnail-Erzeugung darf sie nicht verändert haben.
+4. **Galerie-Vorladen:** Ein mittleres Referenzbild öffnen und im Netzwerkprotokoll prüfen: aktuelles Thumbnail sowie höchstens fünf folgende und zwei vorherige Thumbnails werden vorbereitet. Am Anfang und Ende der Serie muss sich das Fenster entsprechend verkürzen.
+5. **Keine Unterrichtsbilder vorladen:** Während desselben Tests dürfen durch die Vorladefunktion keine benachbarten Unterrichtsbilder übertragen werden.
+6. **Normalmodus:** Detailansicht öffnen; genau das aktuell gewählte Unterrichtsbild soll geladen werden.
+7. **Datensparmodus:** Detailansicht öffnen; das aktuelle Unterrichtsbild darf erst nach Klick auf „Großes Unterrichtsbild laden“ übertragen werden. Die vorausschauenden Thumbnail-Abrufe dürfen weiterarbeiten.
+8. **Importtest:** Ein großes Smartphonefoto importieren und speichern. Danach müssen Unterrichtsbild und Vorschaubild vorhanden sein; das Original darf nicht als dritte Serverdatei gespeichert werden.
+9. **Offline datensparend:** Vorbereitung bis zur Abschlussmeldung laufen lassen, Verbindung trennen, Atlas/Thumbnails/Texte prüfen.
+10. **Offline komplett:** Mit einer kleinen Testbibliothek zusätzlich Detailbilder vorbereiten und offline öffnen.
+11. **Offline-Foto:** Verbindung trennen, Foto importieren, Hinweis „nur auf diesem Gerät“ prüfen, Verbindung wiederherstellen und Datensatz bis zur Erfolgsmeldung speichern.
+12. **Bestehende Unterrichtsbilder:** Stichproben in der Detailansicht prüfen. Die Thumbnail-Erzeugung darf sie nicht verändert haben.
 
 Erst nach erfolgreicher Abnahme: Pull Request erstellen, Netlify Deploy Preview prüfen und anschließend nach `main` mergen.
