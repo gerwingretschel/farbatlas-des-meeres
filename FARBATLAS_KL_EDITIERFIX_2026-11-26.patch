@@ -1,0 +1,82 @@
+diff --git a/course-leader-client.js b/course-leader-client.js
+--- a/course-leader-client.js
++++ b/course-leader-client.js
+@@ -902,6 +902,32 @@
+       setStatus('Akademischer Link lokal vorbereitet. Bitte anschließend serverseitig speichern.');
+     };
+   }
++  function installCourseRecordEditClickHandler() {
++    document.addEventListener('click', (event) => {
++      const button = event.target?.closest?.('.move');
++      if (!button || !courseToken || !courseProfile) return;
++      if (!document.body.classList.contains('course-leader-mode') || document.body.classList.contains('admin-mode')) return;
++
++      // Im KL-Modus den Klick direkt übernehmen. Damit ist die Bearbeitung
++      // unabhängig davon, wann rebuild()/bindPhotos() den Karten-Handler setzte.
++      event.preventDefault();
++      event.stopImmediatePropagation();
++
++      if (!selectedDataset) {
++        setStatus('Bitte den zugewiesenen Datensatz zuerst über den Kursleiter-Bereich öffnen.', 'error');
++        return;
++      }
++      const recordId = String(button.dataset.id || '');
++      const record = typeof records !== 'undefined' && Array.isArray(records)
++        ? records.find((entry) => entry.id === recordId)
++        : null;
++      if (!record) {
++        setStatus('Der Datensatz-Eintrag konnte nicht geöffnet werden. Bitte den Datensatz erneut laden.', 'error');
++        return;
++      }
++      openCourseRecordEditor(record);
++    }, true);
++  }
+   function installEditorOverrides() {
+     if (typeof openKnowledge === 'function') {
+       const originalKnowledge = openKnowledge;
+@@ -1140,6 +1169,7 @@
+     installStyles();
+     installCoursePanel();
+     installAdminPanel();
++    installCourseRecordEditClickHandler();
+     installEditorOverrides();
+     installHelp();
+     updateCourseUi();
+diff --git a/test/course-leader-edit-click.test.mjs b/test/course-leader-edit-click.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/test/course-leader-edit-click.test.mjs
+@@ -0,0 +1,33 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++
++const course = fs.readFileSync(new URL('../course-leader-client.js', import.meta.url), 'utf8');
++
++test('KL animal edit click is handled directly in the capture phase', () => {
++  assert.match(course, /function installCourseRecordEditClickHandler\(\)/);
++  assert.match(course, /event\.target\?\.closest\?\.\('\.move'\)/);
++  assert.match(course, /event\.stopImmediatePropagation\(\)/);
++  assert.match(course, /openCourseRecordEditor\(record\)/);
++  assert.match(course, /\}, true\);/);
++  assert.match(course, /installCourseRecordEditClickHandler\(\);/);
++});
++
++test('KL click handler does not replace the administrator editor', () => {
++  assert.match(course, /document\.body\.classList\.contains\('course-leader-mode'\)/);
++  assert.match(course, /document\.body\.classList\.contains\('admin-mode'\)/);
++  assert.match(course, /!courseToken \|\| !courseProfile/);
++});
++
++test('KL click handler reports missing dataset context instead of failing silently', () => {
++  assert.match(course, /if \(!selectedDataset\)/);
++  assert.match(course, /Bitte den zugewiesenen Datensatz zuerst über den Kursleiter-Bereich öffnen\./);
++  assert.match(course, /records\.find\(\(entry\) => entry\.id === recordId\)/);
++  assert.match(course, /Der Datensatz-Eintrag konnte nicht geöffnet werden\./);
++});
++
++test('the previously installed dataset save guard remains present', () => {
++  assert.match(course, /let datasetRecordKeys = new Set\(\);/);
++  assert.match(course, /datasetRecordKeys/);
++  assert.match(course, /function collectCourseChanges\(\)/);
++});

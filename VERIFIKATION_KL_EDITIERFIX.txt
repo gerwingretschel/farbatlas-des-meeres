@@ -1,0 +1,34 @@
+FARBATLAS KL-EDITIERFIX – VERIFIKATIONSZIELE
+Datum: 2026-11-26
+
+1. PATCH-SCOPE
+- Geändert wird in course-leader-client.js nur der Klickpfad für das orange Bearbeiten-Symbol und dessen Initialisierung.
+- Zusätzlich wird eine neue Regressionstestdatei angelegt.
+- captureBaseline(), collectCourseChanges(), acceptSavedChanges() und saveCourseChanges() sind kein Patch-Ziel.
+
+2. ERWARTETES VERHALTEN
+- KL-Klick auf .move wird in der Capture-Phase übernommen.
+- Der bereits vorhandene rechtegeprüfte openCourseRecordEditor(record) wird verwendet.
+- Im Admin-Modus greift der neue Handler nicht.
+- Fehlender KL-Datensatzkontext führt zu einer sichtbaren Statusmeldung.
+- Nach jedem rebuild() bleibt der delegierte Handler wirksam.
+
+3. AUSZUFÜHRENDE PROJEKTPRÜFUNGEN
+- git apply --check FARBATLAS_KL_EDITIERFIX_2026-11-26.patch
+- npm test
+- npm run check
+
+4. MANUELLER ABSCHLUSSTEST
+- KL anmelden, zugewiesenen Datensatz öffnen, orange Bearbeiten-Schaltfläche anklicken.
+- Dialog muss öffnen.
+- Genau ein Feld lokal übernehmen und serverseitig speichern.
+- Änderungszähler muss 1 anzeigen; Änderung muss nach Neuanmeldung erhalten sein.
+
+5. DURCHGEFÜHRTE PAKETPRÜFUNG
+- Patch-Format und Probe-Anwendung mit git apply --check: BESTANDEN
+- JavaScript-Syntaxprüfung des gepatchten Clients: BESTANDEN
+- Gezielte Regressionstests: 4 von 4 BESTANDEN
+- Scope-Prüfung des Anwendungshunks: kein Eingriff in captureBaseline(), collectCourseChanges(), acceptSavedChanges(), saveCourseChanges() oder datasetRecordKeys
+- ZIP-Integritätsprüfung: BESTANDEN
+
+Hinweis: Die vollständige Projekttestsuite wird nach Anwendung im aktuellen Projektbranch mit npm test und npm run check ausgeführt, weil das Audit kein beschreibbares Git-Arbeitsverzeichnis enthält.
