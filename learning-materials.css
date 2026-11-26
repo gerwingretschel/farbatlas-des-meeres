@@ -8,6 +8,7 @@
 .pdf-toolbar{overflow-x:auto;scrollbar-width:thin}
 .pdf-tool.active,.pdf-tool[aria-pressed="true"]{background:#24bfd0;color:#042b3b;box-shadow:inset 0 0 0 2px #baf7ff}
 .pdf-stage{touch-action:none;box-sizing:border-box;scrollbar-gutter:stable both-edges}
+.pdf-body>.pdf-stage{width:100%;max-width:none!important;margin:0}
 .pdf-stage.is-pannable{cursor:grab}
 .pdf-stage.dragging{cursor:grabbing;user-select:none}
 .pdf-pages{width:max-content;min-width:100%;min-height:100%;box-sizing:border-box;transform-origin:center center}

@@ -60,3 +60,10 @@ test('folder-tree repair remains in the shipped stylesheet', () => {
 test('viewer fix does not touch KL change collection or server routing', () => {
   assert.doesNotMatch(viewer, /collectCourseChanges|captureBaseline|datasetRecordKeys|material-list|material-download-chunk/);
 });
+
+
+test('PDF stage uses the full real viewer area instead of the global main width cap', () => {
+  assert.match(css, /\.pdf-body>\.pdf-stage\{width:100%;max-width:none!important;margin:0\}/);
+  assert.match(viewer, /stage\.clientWidth - horizontalPadding/);
+  assert.match(viewer, /stage\.clientHeight - verticalPadding/);
+});

@@ -1,0 +1,20 @@
+FARBATLAS PDF-VIEWPORTFIX - VERIFIKATION
+Datum: 2026-11-26
+
+Ursache:
+Der PDF-Viewport ist ein <main>-Element. Die globale Projektregel main { max-width: 1280px; margin: auto; } begrenzte deshalb pdfStage auf rund 1280 px. Die bestehende clientWidth/clientHeight-Berechnung arbeitete folglich mit diesem künstlich verkleinerten Bereich.
+
+Gezielte Korrektur:
+.pdf-body>.pdf-stage { width:100%; max-width:none!important; margin:0 }
+
+Unverändert:
+- learning-materials-viewer.js ist bytegleich zum bisherigen Viewerfix.
+- Fit-Formeln, Zoom, Pan, Pinch, Vollbild, Seitenwechsel und Doppelseite.
+- Upload, Offline-Speicherung, Server-Routing, KL-Speicherpfad und Verzeichnisbaum.
+
+Prüfungen:
+- JavaScript-Syntaxprüfung
+- 8 gezielte Regressionstests
+- Hashvergleich der unveränderten Viewer-JavaScript-Datei
+- Patch-Anwendung gegen den bisherigen Viewerfix
+- ZIP-Integritätsprüfung
