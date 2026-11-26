@@ -12,6 +12,19 @@ import {
   userKey,
   verifyPassword,
 } from "./lib/course-utils.mjs";
+import {
+  IMAGE_RULES,
+  compressionBackupKey,
+  compressionRunCounts,
+  compressionRunKey,
+  createCompressionRunId,
+  newCompressionRun,
+  publicCompressionRun,
+  sha256,
+  validateCompressedReplacement,
+  validateCompressionRunId,
+  validateImageKey,
+} from "./lib/image-compression-utils.mjs";
 
 const STORES = Object.freeze({
   DATASETS: "farbatlas-datasets-v10",
@@ -19,6 +32,7 @@ const STORES = Object.freeze({
   COURSE_LEADERS: "farbatlas-course-leaders-v1",
   AUDIT: "farbatlas-course-audit-v1",
   AUTH: "farbatlas-auth-throttle-v1",
+  IMAGE_BACKUPS: "farbatlas-image-backups-v1",
 });
 const SESSION_MS = 8 * 60 * 60 * 1000;
 
@@ -151,6 +165,70 @@ async function deleteDatasetImages(imageStore, name) {
     deletedImages += 1;
   }
   return deletedImages;
+}
+
+async function listAllBlobs(store, prefix, maximum = 500) {
+  const blobs = [];
+  let cursor;
+  do {
+    const page = await store.list({ prefix, ...(cursor ? { cursor } : {}) });
+    blobs.push(...(page.blobs || []));
+    cursor = page.nextCursor;
+  } while (cursor && blobs.length < maximum);
+  return blobs.slice(0, maximum);
+}
+
+async function getCompressionRun(store, runId) {
+  const entry = await store.getWithMetadata(compressionRunKey(runId), {
+    type: "json",
+    consistency: "strong",
+  });
+  if (!entry) throw new ValidationError("Komprimierungslauf nicht gefunden.", 404);
+  return entry;
+}
+
+async function mutateCompressionRun(store, runId, change) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const entry = await getCompressionRun(store, runId);
+    const next = change(structuredClone(entry.data));
+    next.updatedAt = new Date().toISOString();
+    const saved = await store.setJSON(compressionRunKey(runId), next, { onlyIfMatch: entry.etag });
+    if (saved.modified) return next;
+  }
+  throw new ValidationError("Der Sicherungsstand wurde gleichzeitig geändert. Bitte erneut versuchen.", 409);
+}
+
+async function listCompressionRuns(store, name = "") {
+  const wanted = name ? datasetKey(name) : "";
+  const blobs = await listAllBlobs(store, "run-", 300);
+  const selected = blobs.sort((a, b) => b.key.localeCompare(a.key)).slice(0, 100);
+  const runs = await Promise.all(
+    selected.map((blob) => store.get(blob.key, { type: "json", consistency: "strong" }))
+  );
+  return runs
+    .filter((run) => run && (!wanted || run.datasetKey === wanted))
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function datasetImage(entry, imageKey) {
+  const image = (entry?.data?.payload?.images || []).find((item) => item?.imageKey === imageKey);
+  if (!image) throw new ValidationError("Bild gehört nicht zum Datensatz.", 403);
+  return image;
+}
+
+function compressionAnalysis(value, run) {
+  const integer = (key, fallback = 0) => {
+    const number = Number(value?.[key] ?? fallback);
+    return Number.isInteger(number) && number >= 0 && number <= 100_000_000_000 ? number : fallback;
+  };
+  return {
+    checked: integer("checked", run.totalImages),
+    compliant: integer("compliant"),
+    candidates: integer("candidates", run.candidateCount),
+    failed: integer("failed"),
+    originalBytes: integer("originalBytes"),
+    compressedBytes: integer("compressedBytes"),
+  };
 }
 
 const clientIp = (req) =>
@@ -298,6 +376,7 @@ export default async (req) => {
     courseLeaders: getStore(STORES.COURSE_LEADERS),
     audit: getStore(STORES.AUDIT),
     auth: getStore(STORES.AUTH),
+    imageBackups: getStore(STORES.IMAGE_BACKUPS),
   };
 
   try {
@@ -387,6 +466,202 @@ export default async (req) => {
     }
 
     requireAdmin(actor);
+
+    if (body.action === "image-compression-runs") {
+      const name = normalizeName(body.name);
+      if (!name) throw new ValidationError("Datensatzname fehlt.");
+      const runs = await listCompressionRuns(stores.imageBackups, name);
+      return reply({ runs: runs.slice(0, 20).map((run) => publicCompressionRun(run)) });
+    }
+    if (body.action === "image-compression-get-run") {
+      const run = (await getCompressionRun(stores.imageBackups, validateCompressionRunId(body.runId))).data;
+      return reply({ run: publicCompressionRun(run, true) });
+    }
+    if (body.action === "image-compression-start") {
+      const name = normalizeName(body.name);
+      const datasetEntry = await getDatasetEntry(stores.datasets, name);
+      if (!datasetEntry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+      const allImages = datasetEntry.data.payload?.images || [];
+      if (!Array.isArray(allImages) || allImages.some((image) => !image?.imageKey)) {
+        throw new ValidationError("Der Datensatz enthält noch nicht einzeln gespeicherte Bilder.", 409);
+      }
+      const existing = (await listCompressionRuns(stores.imageBackups, name))
+        .find((run) => run.status === "running");
+      if (existing) return reply({ run: publicCompressionRun(existing, true), resumed: true });
+
+      const runId = createCompressionRunId(name);
+      const run = newCompressionRun({
+        name: datasetEntry.data.name || name,
+        totalImages: allImages.length,
+        candidateCount: Number(body.candidateCount),
+        runId,
+      });
+      const saved = await stores.imageBackups.setJSON(compressionRunKey(runId), run, { onlyIfNew: true });
+      if (!saved.modified) throw new ValidationError("Sicherungsstand konnte nicht angelegt werden.", 409);
+      return reply({ run: publicCompressionRun(run, true), resumed: false });
+    }
+    if (body.action === "image-compression-replace") {
+      const runId = validateCompressionRunId(body.runId);
+      const imageKey = validateImageKey(body.imageKey);
+      const runEntry = await getCompressionRun(stores.imageBackups, runId);
+      const run = runEntry.data;
+      if (run.status !== "running") throw new ValidationError("Dieser Komprimierungslauf ist bereits abgeschlossen.", 409);
+      const datasetEntry = await getDatasetEntry(stores.datasets, run.datasetName);
+      if (!datasetEntry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+      const imageReference = datasetImage(datasetEntry, imageKey);
+      const sourceBuffer = await stores.images.get(imageKey, { type: "arrayBuffer" });
+      if (!sourceBuffer) throw new ValidationError("Serverbild nicht gefunden.", 404);
+      const sourceBytes = Buffer.from(sourceBuffer);
+      const sourceMetadataEnvelope = await stores.images.getMetadata(imageKey);
+      const sourceMetadata = { ...(sourceMetadataEnvelope?.metadata || {}) };
+      if (sourceMetadata.dataset !== run.datasetKey) {
+        throw new ValidationError("Bild gehört nicht zum Sicherungsstand.", 403);
+      }
+
+      const prior = run.items?.[imageKey];
+      const currentHash = sha256(sourceBytes);
+      if (prior?.state === "compressed" && currentHash === prior.compressedHash) {
+        return reply({ item: prior, message: "Bild war bereits komprimiert." });
+      }
+      if (prior?.state === "restored") {
+        throw new ValidationError("Das Bild wurde aus diesem Sicherungsstand bereits wiederhergestellt.", 409);
+      }
+      if (prior?.originalHash && ![prior.originalHash, prior.compressedHash].includes(currentHash)) {
+        throw new ValidationError("Das Bild wurde zwischenzeitlich anderweitig verändert und wird nicht überschrieben.", 409);
+      }
+      if (prior?.state === "backed-up" && currentHash === prior.compressedHash) {
+        const recovered = await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+          next.items[imageKey].state = "compressed";
+          next.items[imageKey].compressedAt ||= new Date().toISOString();
+          return next;
+        });
+        return reply({ item: recovered.items[imageKey], message: "Unterbrochener Schritt wurde bestätigt." });
+      }
+
+      const compressedBytes = Buffer.from(String(body.data || ""), "base64");
+      const dimensions = validateCompressedReplacement({
+        bytes: compressedBytes,
+        contentType: body.type,
+        originalBytes: sourceBytes.length,
+        originalType: sourceMetadata.contentType || "image/jpeg",
+        originalDimensions: body.originalDimensions,
+        compressedDimensions: body.compressedDimensions,
+      });
+      const originalHash = sha256(sourceBytes);
+      const compressedHash = sha256(compressedBytes);
+      const backupKey = prior?.backupKey || compressionBackupKey(runId, imageKey);
+      if (!prior?.backupKey) {
+        await stores.imageBackups.set(backupKey, sourceBytes, {
+          metadata: {
+            runId,
+            imageKey,
+            dataset: run.datasetKey,
+            contentType: sourceMetadata.contentType || "image/jpeg",
+            fileName: String(sourceMetadata.fileName || imageReference.name || imageKey),
+            sha256: originalHash,
+          },
+        });
+      }
+
+      await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+        next.items ||= {};
+        next.items[imageKey] = {
+          imageKey,
+          fileName: String(sourceMetadata.fileName || imageReference.name || imageKey),
+          state: "backed-up",
+          backupKey,
+          originalBytes: sourceBytes.length,
+          compressedBytes: compressedBytes.length,
+          originalHash,
+          compressedHash,
+          originalType: sourceMetadata.contentType || "image/jpeg",
+          originalMetadata: sourceMetadata,
+          originalDimensions: dimensions.source,
+          compressedDimensions: dimensions.result,
+          backedUpAt: new Date().toISOString(),
+        };
+        return next;
+      });
+
+      await stores.images.set(imageKey, compressedBytes, {
+        metadata: {
+          ...sourceMetadata,
+          contentType: IMAGE_RULES.outputType,
+          dataset: run.datasetKey,
+          fileName: String(sourceMetadata.fileName || imageReference.name || imageKey),
+          compressionRunId: runId,
+          compressedAt: new Date().toISOString(),
+        },
+      });
+      const savedRun = await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+        next.items[imageKey].state = "compressed";
+        next.items[imageKey].compressedAt = new Date().toISOString();
+        return next;
+      });
+      return reply({
+        item: savedRun.items[imageKey],
+        message: "Bild wurde gesichert und komprimiert.",
+      });
+    }
+    if (body.action === "image-compression-finish") {
+      const runId = validateCompressionRunId(body.runId);
+      const run = await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+        if (next.status !== "running") return next;
+        next.analysis = compressionAnalysis(body.analysis, next);
+        next.status = next.analysis.failed ? "completed-with-errors" : "completed";
+        next.completedAt = new Date().toISOString();
+        return next;
+      });
+      return reply({ run: publicCompressionRun(run), message: "Komprimierungslauf wurde abgeschlossen." });
+    }
+    if (body.action === "image-compression-restore-item") {
+      const runId = validateCompressionRunId(body.runId);
+      const imageKey = validateImageKey(body.imageKey);
+      const runEntry = await getCompressionRun(stores.imageBackups, runId);
+      const run = runEntry.data;
+      const item = run.items?.[imageKey];
+      if (!item) throw new ValidationError("Bild ist in diesem Sicherungsstand nicht enthalten.", 404);
+      if (item.state === "restored") return reply({ item, message: "Bild war bereits wiederhergestellt." });
+      if (!item.backupKey) throw new ValidationError("Originalsicherung fehlt.", 409);
+
+      const backupBuffer = await stores.imageBackups.get(item.backupKey, { type: "arrayBuffer" });
+      if (!backupBuffer) throw new ValidationError("Originalsicherung wurde nicht gefunden.", 404);
+      const originalBytes = Buffer.from(backupBuffer);
+      if (sha256(originalBytes) !== item.originalHash) {
+        throw new ValidationError("Prüfsumme der Originalsicherung stimmt nicht.", 409);
+      }
+      const currentBuffer = await stores.images.get(imageKey, { type: "arrayBuffer" });
+      if (!currentBuffer) throw new ValidationError("Aktuelles Serverbild wurde nicht gefunden.", 404);
+      const currentHash = sha256(Buffer.from(currentBuffer));
+      if (currentHash !== item.compressedHash && currentHash !== item.originalHash) {
+        await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+          next.items[imageKey].state = "conflict";
+          next.items[imageKey].error = "Bild wurde nach der Komprimierung anderweitig verändert.";
+          return next;
+        });
+        throw new ValidationError("Bild wurde nach der Komprimierung anderweitig verändert und wird nicht überschrieben.", 409);
+      }
+      if (currentHash !== item.originalHash) {
+        await stores.images.set(imageKey, originalBytes, { metadata: item.originalMetadata || {} });
+      }
+      const restored = await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+        next.status = "restoring";
+        next.items[imageKey].state = "restored";
+        next.items[imageKey].restoredAt = new Date().toISOString();
+        return next;
+      });
+      return reply({ item: restored.items[imageKey], message: "Originalbild wurde wiederhergestellt." });
+    }
+    if (body.action === "image-compression-restore-finish") {
+      const runId = validateCompressionRunId(body.runId);
+      const run = await mutateCompressionRun(stores.imageBackups, runId, (next) => {
+        const counts = compressionRunCounts(next);
+        next.status = counts.compressed || counts.backedUp ? "restore-partial" : "restored";
+        next.restoredAt = new Date().toISOString();
+        return next;
+      });
+      return reply({ run: publicCompressionRun(run), message: "Wiederherstellungslauf wurde abgeschlossen." });
+    }
 
     if (body.action === "list-datasets") return reply({ datasets: await listDatasets(stores.datasets) });
     if (body.action === "list-course-leaders") {
