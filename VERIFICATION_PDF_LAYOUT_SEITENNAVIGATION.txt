@@ -1,0 +1,41 @@
+VERIFIKATION: PDF-LAYOUT UND SEITENNAVIGATION
+Stand: 26.11.2026
+
+BASIS
+- Audit: Farbatlas_des_Meeres_Audit_2026-11-26_201820.txt
+- Audit-Zeitpunkt: 2026-11-26 20:18:21 +0100
+- learning-materials-viewer.js aus dem zuletzt installierten Uploadfortschritt-/Seitenkopf-Paket
+- learning-materials.css bytegleich aus dem installierten PDF-Viewportfix
+
+GEAENDERTER UMFANG
+- learning-materials.css: Der Stage-Bereich überspannt bei ausgeblendeten Miniaturen beide Grid-Spalten.
+- learning-materials-viewer.js: Nach Ein-/Ausblenden der Miniaturen wird der aktive Ansichtsmodus gegen die neue reale Viewerbreite neu berechnet.
+- learning-materials-viewer.js: Pfeil unten/oben wechselt nur am unteren/oberen vertikalen Seitenrand zur angrenzenden Seite.
+- learning-materials-viewer.js: Vertikale Touch-Wischgesten setzen am Seitenrand in der angrenzenden Seite fort.
+- learning-materials-viewer.js: Rückwärtsnavigation öffnet die vorherige Seite an deren unterem Ende.
+- Regressionstests angepasst; neuer gezielter Test für Layout und Randnavigation ergänzt.
+
+NICHT GEÄNDERT
+- learning-materials-client.js und PDF-Uploadfortschritt
+- PDF.js
+- Serverfunktionen und Routing
+- KL-Rechte, Editier- und Speicherpfad
+- Datensätze, Passwörter und Konfiguration
+- Offline-Speicherung und Materialverzeichnis
+
+AUTOMATISCHE PRUEFUNGEN
+- JavaScript-Syntaxprüfung learning-materials-viewer.js: BESTANDEN
+- test/pdf-layout-edge-navigation.test.mjs: 6/6 BESTANDEN
+- test/pdf-viewer-fix.test.mjs: 8/8 BESTANDEN
+- test/pdf-upload-progress-page-head.test.mjs: 9/9 BESTANDEN
+- test/learning-materials-integration.test.mjs: 10/10 BESTANDEN
+- Gesamt: 33/33 relevante Tests BESTANDEN
+
+ZUSAETZLICHE PRUEFUNGEN
+- Ausgangspakete über vorhandene SHA-256-Listen verifiziert
+- Patch gegen den aktuellen Audit-/Paketstand erzeugt
+- ZIP-Inhalt und SHA-256-Prüfsummen werden vor Auslieferung kontrolliert
+
+VERBLEIBENDE MANUELLE PRUEFUNG
+- Browser-Endtest nach Netlify-Deploy in Desktop- und Touch-Ansicht
+- Besonders prüfen: Miniaturen aus/ein, Breite/Ganze Seite/Fenster füllen, vertikaler Seitenübergang vorwärts und rückwärts

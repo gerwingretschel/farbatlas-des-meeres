@@ -77,7 +77,7 @@
       if (state.fit === 'custom') await renderPages({ center: true });
       else await applyFit(state.fit);
     };
-    q('#pdfThumbnails').onclick = () => q('#pdfThumbDrawer').classList.toggle('hidden');
+    q('#pdfThumbnails').onclick = toggleThumbnails;
     q('#pdfFullscreen').onclick = toggleFullscreen;
     const stage = q('#pdfStage');
     stage.addEventListener('pointerdown', pointerDown);
@@ -97,6 +97,18 @@
   function debounce(fn, delay) {
     let timer;
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+  }
+
+  function nextFrame() {
+    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }
+
+  async function toggleThumbnails() {
+    q('#pdfThumbDrawer').classList.toggle('hidden');
+    // The grid width changes only after layout. Recalculate the active fit mode
+    // against the real, newly available stage width instead of the old split view.
+    await nextFrame();
+    await handleViewportChange();
   }
 
   function zoomStep() {
@@ -231,17 +243,17 @@
     };
   }
 
-  function restoreView(stage, ratios, center, top) {
+  function restoreView(stage, ratios, center, top, bottom) {
     requestAnimationFrame(() => {
       const maxLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
       const maxTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
       stage.scrollLeft = center ? maxLeft / 2 : clamp(ratios.x * stage.scrollWidth - stage.clientWidth / 2, 0, maxLeft);
-      stage.scrollTop = top ? 0 : center ? (state.fit === 'fill' ? maxTop / 2 : 0) : clamp(ratios.y * stage.scrollHeight - stage.clientHeight / 2, 0, maxTop);
+      stage.scrollTop = top ? 0 : bottom ? maxTop : center ? (state.fit === 'fill' ? maxTop / 2 : 0) : clamp(ratios.y * stage.scrollHeight - stage.clientHeight / 2, 0, maxTop);
       stage.classList.toggle('is-pannable', maxLeft > 1 || maxTop > 1);
     });
   }
 
-  async function renderPages({ preserveView = false, center = false, top = false } = {}) {
+  async function renderPages({ preserveView = false, center = false, top = false, bottom = false } = {}) {
     if (!state.document) return;
     const generation = ++state.rendering;
     const container = q('#pdfPages');
@@ -276,14 +288,43 @@
     updateControls();
     document.querySelectorAll('.pdf-thumb.active').forEach((item) => item.classList.remove('active'));
     q(`[data-pdf-thumb="${state.page}"]`)?.classList.add('active');
-    restoreView(stage, ratios, center, top);
+    restoreView(stage, ratios, center, top, bottom);
   }
 
-  async function changePage(page) {
+  async function changePage(page, { position = 'top' } = {}) {
     if (!state.document) return;
     state.page = clamp(Math.round(page || 1), 1, state.document.numPages);
-    if (state.fit === 'custom') await renderPages({ center: true, top: true });
-    else await applyFit(state.fit, { top: true });
+    const edge = { top: position === 'top', bottom: position === 'bottom' };
+    if (state.fit === 'custom') await renderPages({ center: true, ...edge });
+    else {
+      state.scale = clamp(await calculateFitScale(state.fit), MIN_SCALE, MAX_SCALE);
+      await renderPages({ center: true, ...edge });
+    }
+  }
+
+  function isAtPageTop(stage) {
+    return stage.scrollTop <= 2;
+  }
+
+  function isAtPageBottom(stage) {
+    return stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2;
+  }
+
+  function pageStep() {
+    return state.spread ? 2 : 1;
+  }
+
+  function changePageAtVerticalEdge(direction) {
+    const stage = q('#pdfStage');
+    if (direction > 0 && state.page < state.document.numPages && isAtPageBottom(stage)) {
+      changePage(state.page + pageStep(), { position: 'top' });
+      return true;
+    }
+    if (direction < 0 && state.page > 1 && isAtPageTop(stage)) {
+      changePage(state.page - pageStep(), { position: 'bottom' });
+      return true;
+    }
+    return false;
   }
 
   function setScale(scale, render = true) {
@@ -350,6 +391,8 @@
     if (!state.document || q('#farbatlasPdfViewer')?.classList.contains('hidden')) return;
     if (['INPUT', 'TEXTAREA'].includes(event.target.tagName) && event.target.id !== 'pdfPage') return;
     if (event.key === 'Escape') close();
+    else if (event.key === 'ArrowDown' && changePageAtVerticalEdge(1)) event.preventDefault();
+    else if (event.key === 'ArrowUp' && changePageAtVerticalEdge(-1)) event.preventDefault();
     else if (['ArrowRight', 'PageDown'].includes(event.key)) changePage(state.page + (state.spread ? 2 : 1));
     else if (['ArrowLeft', 'PageUp'].includes(event.key)) changePage(state.page - (state.spread ? 2 : 1));
     else if (event.key === '+' || event.key === '=') setScale(state.scale + zoomStep());
@@ -411,7 +454,11 @@
   }
 
   function pointerUp(event) {
-    const final = state.pointers.get(event.pointerId);
+    const stored = state.pointers.get(event.pointerId);
+    const final = stored && {
+      x: Number.isFinite(event.clientX) ? event.clientX : stored.x,
+      y: Number.isFinite(event.clientY) ? event.clientY : stored.y,
+    };
     const wasPinching = state.pointers.size === 2;
     const wasDragging = Boolean(state.dragStart?.moved);
     state.pointers.delete(event.pointerId);
@@ -423,10 +470,16 @@
       state.dragStart = null;
       return;
     }
-    if (!wasDragging && state.swipeStart && final && Date.now() - state.swipeStart.at < 700) {
+    if (state.swipeStart && final) {
+      const elapsed = Date.now() - state.swipeStart.at;
       const dx = final.x - state.swipeStart.x;
       const dy = final.y - state.swipeStart.y;
-      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.3) changePage(state.page + (dx < 0 ? 1 : -1));
+      const verticalSwipe = Math.abs(dy) > 70 && Math.abs(dy) > Math.abs(dx) * 1.3;
+      if (verticalSwipe && changePageAtVerticalEdge(dy < 0 ? 1 : -1)) {
+        event.preventDefault();
+      } else if (!wasDragging && elapsed < 700 && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+        changePage(state.page + (dx < 0 ? 1 : -1));
+      }
     }
     state.swipeStart = null;
     state.dragStart = null;

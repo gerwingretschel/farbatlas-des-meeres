@@ -1,36 +1,13 @@
-# Farbatlas des Meeres – Kursleiter-Arbeitsversion (Phase 1)
+# Farbatlas PDF-Layout und Seitennavigation
 
-Dieses Upgrade baut auf V10 auf und lässt die bestehenden V10-Datensätze und Bildspeicher unverändert.
+Gezieltes Reparaturpaket für den PDF-Viewer vom 26.11.2026.
 
-## Neu
+- vollständige Viewerbreite bei ausgeblendeten Miniaturen
+- automatische Neuberechnung des aktiven Fit-Modus nach dem Umschalten der Miniaturen
+- Seitenwechsel mit Pfeil unten/oben am vertikalen Seitenrand
+- fortlaufender Seitenwechsel durch vertikale Touch-Wischgesten
+- Rückwärtswechsel startet am unteren Rand der vorherigen Seite
 
-- Rolle `courseLeader` mit eigenem Login und achtstündiger Sitzung
-- Administratorverwaltung für Kursleiterkonten
-- Datensatzzuweisungen und getrennte Einzelrechte
-- Bearbeitung von Wissenstexten und akademischen Links
-- serverseitige Rechteprüfung für jede Änderung
-- atomare Versionskontrolle mit Netlify-Blob-ETags
-- Konfliktdialog mit Server- und eigener Fassung
-- Änderungsprotokoll mit Vorher-/Nachher-Version
-- Wiederherstellung einer früheren eigenen Fassung
-- Sperren, Ablaufdatum, Passwort-Reset und sofortiger Sitzungsentzug
-- Anmelde-Drosselung und HTML-/URL-Validierung
+Installation und manueller Kurztest: `INSTALLATION_PDF_LAYOUT_SEITENNAVIGATION.md`
 
-## Unverändert
-
-- bestehende Stores `farbatlas-datasets-v10` und `farbatlas-images-v10`
-- Atlas, Suche, Lernmodus und Administratorfunktionen
-- getrennte V10-Bildspeicherung
-
-## Vor dem Deploy
-
-Die Schritte in `IMPLEMENTIERUNG_KURSLEITER_ARBEITSVERSION.md` durchführen. Insbesondere müssen eine Sicherung, `SESSION_SECRET` und ein kontrollierter Staging-Test erfolgen.
-
-## Lokale Prüfung
-
-```bash
-npm install
-npm run check
-npm test
-npm run build
-```
+Prüfergebnis: `VERIFICATION_PDF_LAYOUT_SEITENNAVIGATION.txt`

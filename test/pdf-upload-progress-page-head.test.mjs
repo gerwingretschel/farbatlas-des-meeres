@@ -76,8 +76,8 @@ test('existing upload protocol and limits remain in place', () => {
 
 test('opening and every page-change path requests the selected page head', () => {
   assert.match(viewer, /await applyFit\('page', \{ top: true \}\)/);
-  assert.match(viewer, /if \(state\.fit === 'custom'\) await renderPages\(\{ center: true, top: true \}\)/);
-  assert.match(viewer, /else await applyFit\(state\.fit, \{ top: true \}\)/);
+  assert.match(viewer, /const edge = \{ top: position === 'top', bottom: position === 'bottom' \}/);
+  assert.match(viewer, /await renderPages\(\{ center: true, \.\.\.edge \}\)/);
   assert.match(viewer, /q\('#pdfPrevious'\)\.onclick = \(\) => changePage/);
   assert.match(viewer, /q\('#pdfNext'\)\.onclick = \(\) => changePage/);
   assert.match(viewer, /q\('#pdfPage'\)\.onchange = \(event\) => changePage/);
@@ -104,7 +104,7 @@ test('top reset keeps horizontal centering and forces vertical scroll to zero', 
     scrollLeft: 99, scrollTop: 700,
     classList: { toggle() {} },
   };
-  restoreView(stage, { x: 0.5, y: 0.5 }, true, true);
+  restoreView(stage, { x: 0.5, y: 0.5 }, true, true, false);
   assert.equal(stage.scrollLeft, 400);
   assert.equal(stage.scrollTop, 0);
 });

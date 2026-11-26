@@ -1,0 +1,283 @@
+diff -ruN a/learning-materials-viewer.js b/learning-materials-viewer.js
+--- a/learning-materials-viewer.js	2026-11-26 19:23:14.330597147 +0000
++++ b/learning-materials-viewer.js	2026-11-26 19:25:42.648477066 +0000
+@@ -77,7 +77,7 @@
+       if (state.fit === 'custom') await renderPages({ center: true });
+       else await applyFit(state.fit);
+     };
+-    q('#pdfThumbnails').onclick = () => q('#pdfThumbDrawer').classList.toggle('hidden');
++    q('#pdfThumbnails').onclick = toggleThumbnails;
+     q('#pdfFullscreen').onclick = toggleFullscreen;
+     const stage = q('#pdfStage');
+     stage.addEventListener('pointerdown', pointerDown);
+@@ -99,6 +99,18 @@
+     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+   }
+ 
++  function nextFrame() {
++    return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
++  }
++
++  async function toggleThumbnails() {
++    q('#pdfThumbDrawer').classList.toggle('hidden');
++    // The grid width changes only after layout. Recalculate the active fit mode
++    // against the real, newly available stage width instead of the old split view.
++    await nextFrame();
++    await handleViewportChange();
++  }
++
+   function zoomStep() {
+     return state.scale < 1 ? 0.1 : state.scale < 3 ? 0.2 : 0.5;
+   }
+@@ -231,17 +243,17 @@
+     };
+   }
+ 
+-  function restoreView(stage, ratios, center, top) {
++  function restoreView(stage, ratios, center, top, bottom) {
+     requestAnimationFrame(() => {
+       const maxLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
+       const maxTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
+       stage.scrollLeft = center ? maxLeft / 2 : clamp(ratios.x * stage.scrollWidth - stage.clientWidth / 2, 0, maxLeft);
+-      stage.scrollTop = top ? 0 : center ? (state.fit === 'fill' ? maxTop / 2 : 0) : clamp(ratios.y * stage.scrollHeight - stage.clientHeight / 2, 0, maxTop);
++      stage.scrollTop = top ? 0 : bottom ? maxTop : center ? (state.fit === 'fill' ? maxTop / 2 : 0) : clamp(ratios.y * stage.scrollHeight - stage.clientHeight / 2, 0, maxTop);
+       stage.classList.toggle('is-pannable', maxLeft > 1 || maxTop > 1);
+     });
+   }
+ 
+-  async function renderPages({ preserveView = false, center = false, top = false } = {}) {
++  async function renderPages({ preserveView = false, center = false, top = false, bottom = false } = {}) {
+     if (!state.document) return;
+     const generation = ++state.rendering;
+     const container = q('#pdfPages');
+@@ -276,14 +288,43 @@
+     updateControls();
+     document.querySelectorAll('.pdf-thumb.active').forEach((item) => item.classList.remove('active'));
+     q(`[data-pdf-thumb="${state.page}"]`)?.classList.add('active');
+-    restoreView(stage, ratios, center, top);
++    restoreView(stage, ratios, center, top, bottom);
+   }
+ 
+-  async function changePage(page) {
++  async function changePage(page, { position = 'top' } = {}) {
+     if (!state.document) return;
+     state.page = clamp(Math.round(page || 1), 1, state.document.numPages);
+-    if (state.fit === 'custom') await renderPages({ center: true, top: true });
+-    else await applyFit(state.fit, { top: true });
++    const edge = { top: position === 'top', bottom: position === 'bottom' };
++    if (state.fit === 'custom') await renderPages({ center: true, ...edge });
++    else {
++      state.scale = clamp(await calculateFitScale(state.fit), MIN_SCALE, MAX_SCALE);
++      await renderPages({ center: true, ...edge });
++    }
++  }
++
++  function isAtPageTop(stage) {
++    return stage.scrollTop <= 2;
++  }
++
++  function isAtPageBottom(stage) {
++    return stage.scrollTop + stage.clientHeight >= stage.scrollHeight - 2;
++  }
++
++  function pageStep() {
++    return state.spread ? 2 : 1;
++  }
++
++  function changePageAtVerticalEdge(direction) {
++    const stage = q('#pdfStage');
++    if (direction > 0 && state.page < state.document.numPages && isAtPageBottom(stage)) {
++      changePage(state.page + pageStep(), { position: 'top' });
++      return true;
++    }
++    if (direction < 0 && state.page > 1 && isAtPageTop(stage)) {
++      changePage(state.page - pageStep(), { position: 'bottom' });
++      return true;
++    }
++    return false;
+   }
+ 
+   function setScale(scale, render = true) {
+@@ -350,6 +391,8 @@
+     if (!state.document || q('#farbatlasPdfViewer')?.classList.contains('hidden')) return;
+     if (['INPUT', 'TEXTAREA'].includes(event.target.tagName) && event.target.id !== 'pdfPage') return;
+     if (event.key === 'Escape') close();
++    else if (event.key === 'ArrowDown' && changePageAtVerticalEdge(1)) event.preventDefault();
++    else if (event.key === 'ArrowUp' && changePageAtVerticalEdge(-1)) event.preventDefault();
+     else if (['ArrowRight', 'PageDown'].includes(event.key)) changePage(state.page + (state.spread ? 2 : 1));
+     else if (['ArrowLeft', 'PageUp'].includes(event.key)) changePage(state.page - (state.spread ? 2 : 1));
+     else if (event.key === '+' || event.key === '=') setScale(state.scale + zoomStep());
+@@ -411,7 +454,11 @@
+   }
+ 
+   function pointerUp(event) {
+-    const final = state.pointers.get(event.pointerId);
++    const stored = state.pointers.get(event.pointerId);
++    const final = stored && {
++      x: Number.isFinite(event.clientX) ? event.clientX : stored.x,
++      y: Number.isFinite(event.clientY) ? event.clientY : stored.y,
++    };
+     const wasPinching = state.pointers.size === 2;
+     const wasDragging = Boolean(state.dragStart?.moved);
+     state.pointers.delete(event.pointerId);
+@@ -423,10 +470,16 @@
+       state.dragStart = null;
+       return;
+     }
+-    if (!wasDragging && state.swipeStart && final && Date.now() - state.swipeStart.at < 700) {
++    if (state.swipeStart && final) {
++      const elapsed = Date.now() - state.swipeStart.at;
+       const dx = final.x - state.swipeStart.x;
+       const dy = final.y - state.swipeStart.y;
+-      if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.3) changePage(state.page + (dx < 0 ? 1 : -1));
++      const verticalSwipe = Math.abs(dy) > 70 && Math.abs(dy) > Math.abs(dx) * 1.3;
++      if (verticalSwipe && changePageAtVerticalEdge(dy < 0 ? 1 : -1)) {
++        event.preventDefault();
++      } else if (!wasDragging && elapsed < 700 && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.3) {
++        changePage(state.page + (dx < 0 ? 1 : -1));
++      }
+     }
+     state.swipeStart = null;
+     state.dragStart = null;
+diff -ruN a/learning-materials.css b/learning-materials.css
+--- a/learning-materials.css	2026-11-26 19:23:14.331597129 +0000
++++ b/learning-materials.css	2026-11-26 19:25:42.649477072 +0000
+@@ -9,6 +9,9 @@
+ .pdf-tool.active,.pdf-tool[aria-pressed="true"]{background:#24bfd0;color:#042b3b;box-shadow:inset 0 0 0 2px #baf7ff}
+ .pdf-stage{touch-action:none;box-sizing:border-box;scrollbar-gutter:stable both-edges}
+ .pdf-body>.pdf-stage{width:100%;max-width:none!important;margin:0}
++
++/* When the thumbnail drawer is hidden, the stage must span both explicit grid tracks. */
++.pdf-body>.pdf-thumbs.hidden+.pdf-stage{grid-column:1/-1;width:auto;min-width:0}
+ .pdf-stage.is-pannable{cursor:grab}
+ .pdf-stage.dragging{cursor:grabbing;user-select:none}
+ .pdf-pages{width:max-content;min-width:100%;min-height:100%;box-sizing:border-box;transform-origin:center center}
+diff -ruN a/test/pdf-layout-edge-navigation.test.mjs b/test/pdf-layout-edge-navigation.test.mjs
+--- a/test/pdf-layout-edge-navigation.test.mjs	1970-01-01 00:00:00.000000000 +0000
++++ b/test/pdf-layout-edge-navigation.test.mjs	2026-11-26 19:25:42.651477083 +0000
+@@ -0,0 +1,79 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import vm from 'node:vm';
++
++const read = (file) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
++const viewer = read('learning-materials-viewer.js');
++const css = read('learning-materials.css');
++
++test('hidden thumbnails release the complete grid width', () => {
++  assert.match(css, /\.pdf-body>\.pdf-thumbs\.hidden\+\.pdf-stage\{grid-column:1\/-1;width:auto;min-width:0\}/);
++  assert.match(viewer, /q\('#pdfThumbnails'\)\.onclick = toggleThumbnails/);
++  assert.match(viewer, /async function toggleThumbnails\(\)[\s\S]*classList\.toggle\('hidden'\)[\s\S]*await nextFrame\(\)[\s\S]*await handleViewportChange\(\)/);
++});
++
++test('top and bottom boundaries tolerate rounding and scrollbar subpixels', () => {
++  const testable = viewer.replace(
++    'window.FarbatlasPdfViewer = Object.freeze({ open, close, inspect });',
++    'window.__edgeTest = { isAtPageTop, isAtPageBottom };',
++  );
++  const sandbox = {
++    window: { addEventListener() {} },
++    document: { querySelector() { return null; } },
++    screen: { orientation: null },
++    console,
++  };
++  vm.runInNewContext(testable, sandbox);
++  const { isAtPageTop, isAtPageBottom } = sandbox.window.__edgeTest;
++  assert.equal(isAtPageTop({ scrollTop: 2 }), true);
++  assert.equal(isAtPageTop({ scrollTop: 3 }), false);
++  assert.equal(isAtPageBottom({ scrollTop: 398, clientHeight: 600, scrollHeight: 1000 }), true);
++  assert.equal(isAtPageBottom({ scrollTop: 397, clientHeight: 600, scrollHeight: 1000 }), false);
++});
++
++test('upward navigation opens the previous page at its lower edge', () => {
++  const testable = viewer.replace(
++    'window.FarbatlasPdfViewer = Object.freeze({ open, close, inspect });',
++    'window.__edgeTest = { restoreView, state };',
++  );
++  const sandbox = {
++    window: { addEventListener() {} },
++    document: { querySelector() { return null; } },
++    screen: { orientation: null },
++    requestAnimationFrame(callback) { callback(); },
++    console,
++  };
++  vm.runInNewContext(testable, sandbox);
++  const { restoreView, state } = sandbox.window.__edgeTest;
++  state.fit = 'fill';
++  const stage = {
++    scrollWidth: 1200, clientWidth: 400, scrollHeight: 1800, clientHeight: 600,
++    scrollLeft: 0, scrollTop: 0, classList: { toggle() {} },
++  };
++  restoreView(stage, { x: 0.5, y: 0.5 }, true, false, true);
++  assert.equal(stage.scrollLeft, 400);
++  assert.equal(stage.scrollTop, 1200);
++});
++
++test('vertical arrow keys cross pages only at the corresponding edge', () => {
++  assert.match(viewer, /event\.key === 'ArrowDown' && changePageAtVerticalEdge\(1\)/);
++  assert.match(viewer, /event\.key === 'ArrowUp' && changePageAtVerticalEdge\(-1\)/);
++  assert.match(viewer, /direction > 0[\s\S]*isAtPageBottom\(stage\)[\s\S]*position: 'top'/);
++  assert.match(viewer, /direction < 0[\s\S]*isAtPageTop\(stage\)[\s\S]*position: 'bottom'/);
++});
++
++test('vertical touchscreen swipes continue to adjacent pages at page edges', () => {
++  assert.match(viewer, /const verticalSwipe = Math\.abs\(dy\) > 70/);
++  assert.match(viewer, /verticalSwipe && changePageAtVerticalEdge\(dy < 0 \? 1 : -1\)/);
++  assert.match(viewer, /else if \(!wasDragging[\s\S]*Math\.abs\(dx\) > 70/);
++});
++
++test('existing horizontal, page-key, fit and pinch controls remain intact', () => {
++  assert.match(viewer, /\['ArrowRight', 'PageDown'\]/);
++  assert.match(viewer, /\['ArrowLeft', 'PageUp'\]/);
++  assert.match(viewer, /applyFit\('width'\)/);
++  assert.match(viewer, /applyFit\('page'\)/);
++  assert.match(viewer, /applyFit\('fill'\)/);
++  assert.match(viewer, /pinchDistance/);
++});
+\ No newline at end of file
+diff -ruN a/test/pdf-upload-progress-page-head.test.mjs b/test/pdf-upload-progress-page-head.test.mjs
+--- a/test/pdf-upload-progress-page-head.test.mjs	2026-11-26 19:23:14.333597093 +0000
++++ b/test/pdf-upload-progress-page-head.test.mjs	2026-11-26 19:25:42.651477083 +0000
+@@ -76,8 +76,8 @@
+ 
+ test('opening and every page-change path requests the selected page head', () => {
+   assert.match(viewer, /await applyFit\('page', \{ top: true \}\)/);
+-  assert.match(viewer, /if \(state\.fit === 'custom'\) await renderPages\(\{ center: true, top: true \}\)/);
+-  assert.match(viewer, /else await applyFit\(state\.fit, \{ top: true \}\)/);
++  assert.match(viewer, /const edge = \{ top: position === 'top', bottom: position === 'bottom' \}/);
++  assert.match(viewer, /await renderPages\(\{ center: true, \.\.\.edge \}\)/);
+   assert.match(viewer, /q\('#pdfPrevious'\)\.onclick = \(\) => changePage/);
+   assert.match(viewer, /q\('#pdfNext'\)\.onclick = \(\) => changePage/);
+   assert.match(viewer, /q\('#pdfPage'\)\.onchange = \(event\) => changePage/);
+@@ -104,7 +104,7 @@
+     scrollLeft: 99, scrollTop: 700,
+     classList: { toggle() {} },
+   };
+-  restoreView(stage, { x: 0.5, y: 0.5 }, true, true);
++  restoreView(stage, { x: 0.5, y: 0.5 }, true, true, false);
+   assert.equal(stage.scrollLeft, 400);
+   assert.equal(stage.scrollTop, 0);
+ });
+diff -ruN a/test/pdf-viewer-fix.test.mjs b/test/pdf-viewer-fix.test.mjs
+--- a/test/pdf-viewer-fix.test.mjs	2026-11-26 19:23:14.332597111 +0000
++++ b/test/pdf-viewer-fix.test.mjs	2026-11-26 19:25:42.651477083 +0000
+@@ -8,8 +8,8 @@
+ 
+ test('PDF starts centered in whole-page mode', () => {
+   assert.match(viewer, /state\.fit = 'page'/);
+-  assert.match(viewer, /await applyFit\('page'\)/);
+-  assert.match(viewer, /restoreView\(stage, ratios, center, top\)/);
++  assert.match(viewer, /await applyFit\('page'(?:, \{ top: true \})?\)/);
++  assert.match(viewer, /restoreView\(stage, ratios, center, top, bottom\)/);
+   assert.match(css, /\.pdf-pages\{width:max-content;min-width:100%;min-height:100%/);
+   assert.match(css, /\.pdf-pages\.is-contained\{align-items:center\}/);
+ });
+@@ -64,6 +64,7 @@
+ 
+ test('PDF stage uses the full real viewer area instead of the global main width cap', () => {
+   assert.match(css, /\.pdf-body>\.pdf-stage\{width:100%;max-width:none!important;margin:0\}/);
++  assert.match(css, /\.pdf-body>\.pdf-thumbs\.hidden\+\.pdf-stage\{grid-column:1\/-1;width:auto;min-width:0\}/);
+   assert.match(viewer, /stage\.clientWidth - horizontalPadding/);
+   assert.match(viewer, /stage\.clientHeight - verticalPadding/);
+ });

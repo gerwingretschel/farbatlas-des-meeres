@@ -8,8 +8,8 @@ const css = read('learning-materials.css');
 
 test('PDF starts centered in whole-page mode', () => {
   assert.match(viewer, /state\.fit = 'page'/);
-  assert.match(viewer, /await applyFit\('page'\)/);
-  assert.match(viewer, /restoreView\(stage, ratios, center, top\)/);
+  assert.match(viewer, /await applyFit\('page'(?:, \{ top: true \})?\)/);
+  assert.match(viewer, /restoreView\(stage, ratios, center, top, bottom\)/);
   assert.match(css, /\.pdf-pages\{width:max-content;min-width:100%;min-height:100%/);
   assert.match(css, /\.pdf-pages\.is-contained\{align-items:center\}/);
 });
@@ -64,6 +64,7 @@ test('viewer fix does not touch KL change collection or server routing', () => {
 
 test('PDF stage uses the full real viewer area instead of the global main width cap', () => {
   assert.match(css, /\.pdf-body>\.pdf-stage\{width:100%;max-width:none!important;margin:0\}/);
+  assert.match(css, /\.pdf-body>\.pdf-thumbs\.hidden\+\.pdf-stage\{grid-column:1\/-1;width:auto;min-width:0\}/);
   assert.match(viewer, /stage\.clientWidth - horizontalPadding/);
   assert.match(viewer, /stage\.clientHeight - verticalPadding/);
 });
