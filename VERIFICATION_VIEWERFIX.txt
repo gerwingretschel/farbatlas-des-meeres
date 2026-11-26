@@ -1,0 +1,23 @@
+Farbatlas PDF-Viewerfix – Verifikation
+Datum: 26.11.2026
+
+Prüfumfang:
+- JavaScript-Syntax
+- Zentrierte Ganzseiten-Standardansicht
+- echte Fit-Berechnung für Breite, Ganze Seite und Fenster füllen
+- klar beschriftete Ansichts- und Vollbildbedienung
+- freier Zoom bis 600 %
+- Maus-/Touch-Panning für vergrößerte Seiten
+- Pinch- und Rad-Zoom
+- Browser-Vollbild
+- Reaktion auf Größen- und Orientierungswechsel
+- Erhalt der Verzeichnisbaum-CSS-Korrektur
+- keine Berührung von KL-Speicherpfad oder Server-Routing
+
+Ergebnis:
+- JavaScript-Syntaxprüfung: bestanden
+- gezielte Regressionstests: 7 von 7 bestanden
+- Patchprüfung: Viewer-JavaScript und Stylesheet sind die einzigen Laufzeitdateien im Paket
+- KL-Speicherpfad und Server-Routing: nicht im Paket enthalten und damit unverändert
+
+SHA-256-Werte: siehe SHA256SUMS.txt

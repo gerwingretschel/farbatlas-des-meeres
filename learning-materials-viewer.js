@@ -1,7 +1,9 @@
-/* Farbatlas PDF viewer: responsive single/two-page reading, thumbnails, zoom and fullscreen */
+/* Farbatlas PDF viewer: centered fit modes, deep zoom, pan, thumbnails and fullscreen */
 (() => {
   'use strict';
 
+  const MIN_SCALE = 0.15;
+  const MAX_SCALE = 6;
   const state = {
     pdfjs: null,
     document: null,
@@ -10,12 +12,13 @@
     page: 1,
     spread: false,
     scale: 1,
-    fit: 'width',
+    fit: 'page',
     rendering: 0,
     pointers: new Map(),
     pinchDistance: 0,
     pinchScale: 1,
     swipeStart: null,
+    dragStart: null,
     thumbObserver: null,
   };
   const q = (selector) => document.querySelector(selector);
@@ -37,36 +40,43 @@
     document.body.insertAdjacentHTML('beforeend', `
       <section id="farbatlasPdfViewer" class="pdf-viewer hidden" role="dialog" aria-modal="true" aria-label="PDF-Lernmaterial">
         <header class="pdf-toolbar">
-          <button id="pdfClose" class="pdf-icon" title="Viewer schließen">✕</button>
+          <button id="pdfClose" class="pdf-icon" title="Viewer schließen" aria-label="Viewer schließen">✕</button>
           <div class="pdf-title"><strong id="pdfTitle">PDF</strong><span id="pdfStatus"></span></div>
-          <button id="pdfThumbnails" class="pdf-icon" title="Miniaturansichten">▦</button>
-          <button id="pdfPrevious" class="pdf-icon" title="Vorherige Seite">‹</button>
+          <button id="pdfThumbnails" class="pdf-icon" title="Seitenübersicht ein- oder ausblenden" aria-label="Seitenübersicht">▦</button>
+          <button id="pdfPrevious" class="pdf-icon" title="Vorherige Seite" aria-label="Vorherige Seite">‹</button>
           <label class="pdf-page-field"><input id="pdfPage" type="number" min="1" value="1" aria-label="Seite"><span id="pdfPageCount">/ 1</span></label>
-          <button id="pdfNext" class="pdf-icon" title="Nächste Seite">›</button>
-          <button id="pdfZoomOut" class="pdf-icon" title="Verkleinern">−</button>
-          <input id="pdfZoom" class="pdf-zoom" type="range" min="40" max="350" step="5" value="100" aria-label="Zoom">
-          <button id="pdfZoomIn" class="pdf-icon" title="Vergrößern">+</button>
-          <button id="pdfFitWidth" class="pdf-tool" title="Seitenbreite anpassen">Breite</button>
-          <button id="pdfFitPage" class="pdf-tool" title="Ganze Seite einpassen">Seite</button>
-          <button id="pdfSpread" class="pdf-tool" title="Ein- oder Zweiseitenansicht">1 Seite</button>
-          <button id="pdfFullscreen" class="pdf-icon" title="Vollbild">⛶</button>
+          <button id="pdfNext" class="pdf-icon" title="Nächste Seite" aria-label="Nächste Seite">›</button>
+          <button id="pdfZoomOut" class="pdf-icon" title="Verkleinern" aria-label="Verkleinern">−</button>
+          <input id="pdfZoom" class="pdf-zoom" type="range" min="15" max="600" step="1" value="100" aria-label="Zoomstufe">
+          <button id="pdfZoomIn" class="pdf-icon" title="Vergrößern" aria-label="Vergrößern">+</button>
+          <button id="pdfFitWidth" class="pdf-tool" title="Auf die verfügbare Breite einpassen">↔ Breite</button>
+          <button id="pdfFitPage" class="pdf-tool" title="Die ganze Seite sichtbar einpassen">▣ Ganze Seite</button>
+          <button id="pdfFitFill" class="pdf-tool" title="Fenster vollständig füllen; Randbereiche sind durch Scrollen erreichbar">⤢ Fenster füllen</button>
+          <button id="pdfSpread" class="pdf-tool" title="Zwischen Einzel- und Doppelseitenansicht wechseln">Ansicht: Einzelseite</button>
+          <button id="pdfFullscreen" class="pdf-tool" title="Browser-Vollbild ein- oder ausschalten">⛶ Vollbild</button>
         </header>
         <div class="pdf-body">
           <aside id="pdfThumbDrawer" class="pdf-thumbs hidden" aria-label="Seitenminiaturen"><div id="pdfThumbList"></div></aside>
-          <main id="pdfStage" class="pdf-stage" tabindex="0"><div id="pdfPages" class="pdf-pages"></div></main>
+          <main id="pdfStage" class="pdf-stage" tabindex="0" aria-label="PDF-Seiten"><div id="pdfPages" class="pdf-pages"></div></main>
         </div>
       </section>`);
     q('#pdfClose').onclick = close;
     q('#pdfPrevious').onclick = () => changePage(state.page - (state.spread ? 2 : 1));
     q('#pdfNext').onclick = () => changePage(state.page + (state.spread ? 2 : 1));
     q('#pdfPage').onchange = (event) => changePage(Number(event.target.value));
-    q('#pdfZoomOut').onclick = () => setScale(state.scale - 0.1);
-    q('#pdfZoomIn').onclick = () => setScale(state.scale + 0.1);
+    q('#pdfZoomOut').onclick = () => setScale(state.scale - zoomStep());
+    q('#pdfZoomIn').onclick = () => setScale(state.scale + zoomStep());
     q('#pdfZoom').oninput = (event) => setScale(Number(event.target.value) / 100, false);
-    q('#pdfZoom').onchange = () => renderPages();
-    q('#pdfFitWidth').onclick = () => { state.fit = 'width'; renderPages(); };
-    q('#pdfFitPage').onclick = () => { state.fit = 'page'; renderPages(); };
-    q('#pdfSpread').onclick = () => { state.spread = !state.spread; q('#pdfSpread').textContent = state.spread ? '2 Seiten' : '1 Seite'; renderPages(); };
+    q('#pdfZoom').onchange = () => renderPages({ preserveView: true });
+    q('#pdfFitWidth').onclick = () => applyFit('width');
+    q('#pdfFitPage').onclick = () => applyFit('page');
+    q('#pdfFitFill').onclick = () => applyFit('fill');
+    q('#pdfSpread').onclick = async () => {
+      state.spread = !state.spread;
+      updateControls();
+      if (state.fit === 'custom') await renderPages({ center: true });
+      else await applyFit(state.fit);
+    };
     q('#pdfThumbnails').onclick = () => q('#pdfThumbDrawer').classList.toggle('hidden');
     q('#pdfFullscreen').onclick = toggleFullscreen;
     const stage = q('#pdfStage');
@@ -76,13 +86,25 @@
     stage.addEventListener('pointercancel', pointerUp);
     stage.addEventListener('wheel', wheelZoom, { passive: false });
     window.addEventListener('keydown', keyDown);
-    window.addEventListener('resize', debounce(() => state.document && renderPages(), 180));
-    screen.orientation?.addEventListener?.('change', () => setTimeout(() => state.document && renderPages(), 180));
+    window.addEventListener('resize', debounce(handleViewportChange, 180));
+    screen.orientation?.addEventListener?.('change', () => setTimeout(handleViewportChange, 180));
+    document.addEventListener('fullscreenchange', () => {
+      updateControls();
+      setTimeout(handleViewportChange, 80);
+    });
   }
 
   function debounce(fn, delay) {
     let timer;
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
+  }
+
+  function zoomStep() {
+    return state.scale < 1 ? 0.1 : state.scale < 3 ? 0.2 : 0.5;
+  }
+
+  function fitLabel() {
+    return { width: 'Breite', page: 'Ganze Seite', fill: 'Fenster füllen', custom: 'Freier Zoom' }[state.fit] || 'Freier Zoom';
   }
 
   function updateControls() {
@@ -93,7 +115,18 @@
     q('#pdfPrevious').disabled = state.page <= 1;
     q('#pdfNext').disabled = state.page >= state.document.numPages;
     q('#pdfZoom').value = String(Math.round(state.scale * 100));
-    q('#pdfStatus').textContent = `${Math.round(state.scale * 100)} %${state.meta?.offline ? ' · offline' : ''}`;
+    q('#pdfStatus').textContent = `${Math.round(state.scale * 100)} % · ${fitLabel()}${state.meta?.offline ? ' · offline' : ''}`;
+    q('#pdfSpread').textContent = state.spread ? 'Ansicht: Doppelseite' : 'Ansicht: Einzelseite';
+    q('#pdfSpread').setAttribute('aria-pressed', String(state.spread));
+    for (const [id, mode] of [['#pdfFitWidth', 'width'], ['#pdfFitPage', 'page'], ['#pdfFitFill', 'fill']]) {
+      const button = q(id);
+      const active = state.fit === mode;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    const fullscreen = Boolean(document.fullscreenElement || q('#farbatlasPdfViewer')?.classList.contains('pdf-browser-fullscreen'));
+    q('#pdfFullscreen').textContent = fullscreen ? '⛶ Vollbild beenden' : '⛶ Vollbild';
+    q('#pdfFullscreen').setAttribute('aria-pressed', String(fullscreen));
   }
 
   async function open(blob, meta = {}) {
@@ -109,15 +142,15 @@
     state.page = clamp(Number(meta.page || 1), 1, 100000);
     state.spread = false;
     state.scale = 1;
-    state.fit = 'width';
-    q('#pdfSpread').textContent = '1 Seite';
+    state.fit = 'page';
+    state.pointers.clear();
     try {
       const library = await pdfJs();
       const bytes = new Uint8Array(await blob.arrayBuffer());
       state.document = await library.getDocument({ data: bytes }).promise;
       state.page = clamp(state.page, 1, state.document.numPages);
       buildThumbnails();
-      await renderPages();
+      await applyFit('page');
       q('#pdfStage').focus();
     } catch (error) {
       q('#pdfPages').innerHTML = `<div class="pdf-error"><h2>PDF konnte nicht geöffnet werden</h2><p>${escapeHtml(error.message || String(error))}</p></div>`;
@@ -128,14 +161,19 @@
   async function inspect(blob) {
     const library = await pdfJs();
     const bytes = new Uint8Array(await blob.arrayBuffer());
-    const document = await library.getDocument({ data: bytes }).promise;
-    const pageCount = document.numPages;
-    await document.destroy();
+    const pdfDocument = await library.getDocument({ data: bytes }).promise;
+    const pageCount = pdfDocument.numPages;
+    await pdfDocument.destroy();
     return { pageCount };
   }
 
   async function close() {
-    q('#farbatlasPdfViewer')?.classList.add('hidden');
+    const viewer = q('#farbatlasPdfViewer');
+    if (document.fullscreenElement && viewer?.contains(document.fullscreenElement)) {
+      await document.exitFullscreen().catch(() => {});
+    }
+    viewer?.classList.add('hidden');
+    viewer?.classList.remove('pdf-browser-fullscreen');
     document.body.classList.remove('pdf-viewer-open');
     state.thumbObserver?.disconnect();
     state.thumbObserver = null;
@@ -143,6 +181,7 @@
     state.document = null;
     state.blob = null;
     state.meta = null;
+    state.pointers.clear();
   }
 
   function pageNumbers() {
@@ -151,34 +190,74 @@
     return [first, first + 1].filter((page) => page <= state.document.numPages);
   }
 
-  async function fitScale(page) {
-    const base = page.getViewport({ scale: 1 });
+  function stageSpace() {
     const stage = q('#pdfStage');
-    const availableWidth = Math.max(180, stage.clientWidth - (state.spread ? 44 : 32));
-    const availableHeight = Math.max(180, stage.clientHeight - 32);
-    const pageWidth = state.spread ? availableWidth / 2 : availableWidth;
-    return state.fit === 'page'
-      ? Math.min(pageWidth / base.width, availableHeight / base.height)
-      : pageWidth / base.width;
+    const style = getComputedStyle(stage);
+    const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const verticalPadding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const pageGap = parseFloat(getComputedStyle(q('#pdfPages')).columnGap || 0);
+    return {
+      width: Math.max(120, stage.clientWidth - horizontalPadding),
+      height: Math.max(120, stage.clientHeight - verticalPadding),
+      gap: Number.isFinite(pageGap) ? pageGap : 0,
+    };
   }
 
-  async function renderPages() {
+  async function calculateFitScale(mode) {
+    if (!state.document) return 1;
+    const page = await state.document.getPage(pageNumbers()[0]);
+    const base = page.getViewport({ scale: 1 });
+    const space = stageSpace();
+    const count = state.spread ? Math.min(2, pageNumbers().length) : 1;
+    const pageWidth = Math.max(80, (space.width - space.gap * (count - 1)) / count);
+    const widthScale = pageWidth / base.width;
+    const heightScale = space.height / base.height;
+    if (mode === 'page') return Math.min(widthScale, heightScale);
+    if (mode === 'fill') return Math.max(widthScale, heightScale);
+    return widthScale;
+  }
+
+  async function applyFit(mode) {
+    if (!state.document) return;
+    state.fit = mode;
+    state.scale = clamp(await calculateFitScale(mode), MIN_SCALE, MAX_SCALE);
+    await renderPages({ center: true });
+  }
+
+  function viewRatios(stage) {
+    return {
+      x: stage.scrollWidth > 0 ? (stage.scrollLeft + stage.clientWidth / 2) / stage.scrollWidth : 0.5,
+      y: stage.scrollHeight > 0 ? (stage.scrollTop + stage.clientHeight / 2) / stage.scrollHeight : 0.5,
+    };
+  }
+
+  function restoreView(stage, ratios, center, top) {
+    requestAnimationFrame(() => {
+      const maxLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
+      const maxTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
+      stage.scrollLeft = center ? maxLeft / 2 : clamp(ratios.x * stage.scrollWidth - stage.clientWidth / 2, 0, maxLeft);
+      stage.scrollTop = top ? 0 : center ? (state.fit === 'fill' ? maxTop / 2 : 0) : clamp(ratios.y * stage.scrollHeight - stage.clientHeight / 2, 0, maxTop);
+      stage.classList.toggle('is-pannable', maxLeft > 1 || maxTop > 1);
+    });
+  }
+
+  async function renderPages({ preserveView = false, center = false, top = false } = {}) {
     if (!state.document) return;
     const generation = ++state.rendering;
     const container = q('#pdfPages');
-    const oldScrollLeft = q('#pdfStage').scrollLeft;
-    const oldScrollTop = q('#pdfStage').scrollTop;
+    const stage = q('#pdfStage');
+    const ratios = preserveView ? viewRatios(stage) : { x: 0.5, y: 0.5 };
     container.classList.toggle('spread', state.spread);
+    container.classList.toggle('is-contained', state.fit === 'page');
     container.innerHTML = '';
     const numbers = pageNumbers();
+    const ratio = window.devicePixelRatio || 1;
     for (const number of numbers) {
       const page = await state.document.getPage(number);
       if (generation !== state.rendering) return;
-      const automatic = await fitScale(page);
-      const effectiveScale = state.fit ? automatic * state.scale : state.scale;
-      const viewport = page.getViewport({ scale: clamp(effectiveScale, 0.15, 6) * (window.devicePixelRatio || 1) });
-      const displayWidth = viewport.width / (window.devicePixelRatio || 1);
-      const displayHeight = viewport.height / (window.devicePixelRatio || 1);
+      const viewport = page.getViewport({ scale: state.scale * ratio });
+      const displayWidth = viewport.width / ratio;
+      const displayHeight = viewport.height / ratio;
       const wrapper = document.createElement('article');
       wrapper.className = 'pdf-page';
       wrapper.dataset.page = String(number);
@@ -188,28 +267,30 @@
       canvas.height = Math.ceil(viewport.height);
       canvas.style.width = `${displayWidth}px`;
       canvas.style.height = `${displayHeight}px`;
+      wrapper.style.width = `${displayWidth}px`;
+      wrapper.style.height = `${displayHeight}px`;
       container.appendChild(wrapper);
       await page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport }).promise;
       if (generation !== state.rendering) return;
     }
-    q('#pdfStage').scrollLeft = oldScrollLeft;
-    q('#pdfStage').scrollTop = oldScrollTop;
     updateControls();
     document.querySelectorAll('.pdf-thumb.active').forEach((item) => item.classList.remove('active'));
     q(`[data-pdf-thumb="${state.page}"]`)?.classList.add('active');
+    restoreView(stage, ratios, center, top);
   }
 
-  function changePage(page) {
+  async function changePage(page) {
     if (!state.document) return;
     state.page = clamp(Math.round(page || 1), 1, state.document.numPages);
-    q('#pdfStage').scrollTo({ top: 0, left: 0, behavior: 'smooth' });
-    renderPages();
+    if (state.fit === 'custom') await renderPages({ center: true, top: true });
+    else await applyFit(state.fit);
   }
 
   function setScale(scale, render = true) {
-    state.scale = clamp(Number(scale || 1), 0.4, 3.5);
+    state.fit = 'custom';
+    state.scale = clamp(Number(scale || 1), MIN_SCALE, MAX_SCALE);
     updateControls();
-    if (render) renderPages();
+    if (render) renderPages({ preserveView: true });
   }
 
   function buildThumbnails() {
@@ -237,11 +318,12 @@
     const page = await state.document.getPage(number);
     const base = page.getViewport({ scale: 1 });
     const scale = 128 / base.width;
-    const viewport = page.getViewport({ scale: scale * (window.devicePixelRatio || 1) });
+    const ratio = window.devicePixelRatio || 1;
+    const viewport = page.getViewport({ scale: scale * ratio });
     const canvas = button.querySelector('canvas');
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
-    canvas.style.width = `${viewport.width / (window.devicePixelRatio || 1)}px`;
+    canvas.style.width = `${viewport.width / ratio}px`;
     await page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport }).promise;
   }
 
@@ -249,11 +331,19 @@
     const viewer = q('#farbatlasPdfViewer');
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
-      else if (viewer.requestFullscreen) await viewer.requestFullscreen();
+      else if (viewer.requestFullscreen) await viewer.requestFullscreen({ navigationUI: 'hide' });
       else viewer.classList.toggle('pdf-browser-fullscreen');
     } catch {
       viewer.classList.toggle('pdf-browser-fullscreen');
     }
+    updateControls();
+    setTimeout(handleViewportChange, 80);
+  }
+
+  async function handleViewportChange() {
+    if (!state.document) return;
+    if (state.fit === 'custom') await renderPages({ preserveView: true });
+    else await applyFit(state.fit);
   }
 
   function keyDown(event) {
@@ -262,57 +352,84 @@
     if (event.key === 'Escape') close();
     else if (['ArrowRight', 'PageDown'].includes(event.key)) changePage(state.page + (state.spread ? 2 : 1));
     else if (['ArrowLeft', 'PageUp'].includes(event.key)) changePage(state.page - (state.spread ? 2 : 1));
-    else if (event.key === '+' || event.key === '=') setScale(state.scale + 0.1);
-    else if (event.key === '-') setScale(state.scale - 0.1);
+    else if (event.key === '+' || event.key === '=') setScale(state.scale + zoomStep());
+    else if (event.key === '-') setScale(state.scale - zoomStep());
+    else if (event.key === '0') applyFit('page');
   }
 
   function wheelZoom(event) {
     if (!(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
-    setScale(state.scale + (event.deltaY < 0 ? 0.08 : -0.08));
+    const factor = event.deltaY < 0 ? 1.08 : 1 / 1.08;
+    setScale(state.scale * factor);
   }
 
   function pointerDown(event) {
-    q('#pdfStage').setPointerCapture?.(event.pointerId);
+    const stage = q('#pdfStage');
+    stage.setPointerCapture?.(event.pointerId);
     state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (state.pointers.size === 1) state.swipeStart = { x: event.clientX, y: event.clientY, at: Date.now() };
+    if (state.pointers.size === 1) {
+      state.swipeStart = { x: event.clientX, y: event.clientY, at: Date.now() };
+      state.dragStart = { x: event.clientX, y: event.clientY, left: stage.scrollLeft, top: stage.scrollTop, moved: false };
+      stage.classList.add('dragging');
+    }
     if (state.pointers.size === 2) {
       const [a, b] = [...state.pointers.values()];
       state.pinchDistance = Math.hypot(a.x - b.x, a.y - b.y);
       state.pinchScale = state.scale;
       state.swipeStart = null;
+      state.dragStart = null;
     }
   }
 
   function pointerMove(event) {
     if (!state.pointers.has(event.pointerId)) return;
     state.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (state.pointers.size !== 2) return;
-    const [a, b] = [...state.pointers.values()];
-    const distance = Math.hypot(a.x - b.x, a.y - b.y);
-    if (state.pinchDistance > 0) {
-      state.scale = clamp(state.pinchScale * distance / state.pinchDistance, 0.4, 3.5);
-      updateControls();
-      q('#pdfPages').style.transform = `scale(${state.scale / state.pinchScale})`;
+    const stage = q('#pdfStage');
+    if (state.pointers.size === 2) {
+      event.preventDefault();
+      const [a, b] = [...state.pointers.values()];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      if (state.pinchDistance > 0) {
+        state.fit = 'custom';
+        state.scale = clamp(state.pinchScale * distance / state.pinchDistance, MIN_SCALE, MAX_SCALE);
+        updateControls();
+        q('#pdfPages').style.transform = `scale(${state.scale / state.pinchScale})`;
+      }
+      return;
+    }
+    if (!state.dragStart) return;
+    const dx = event.clientX - state.dragStart.x;
+    const dy = event.clientY - state.dragStart.y;
+    const canPan = stage.scrollWidth > stage.clientWidth + 1 || stage.scrollHeight > stage.clientHeight + 1;
+    if (canPan && Math.hypot(dx, dy) > 5) {
+      event.preventDefault();
+      state.dragStart.moved = true;
+      stage.scrollLeft = state.dragStart.left - dx;
+      stage.scrollTop = state.dragStart.top - dy;
     }
   }
 
   function pointerUp(event) {
     const final = state.pointers.get(event.pointerId);
     const wasPinching = state.pointers.size === 2;
+    const wasDragging = Boolean(state.dragStart?.moved);
     state.pointers.delete(event.pointerId);
+    q('#pdfStage').classList.remove('dragging');
     if (wasPinching) {
       q('#pdfPages').style.transform = '';
-      renderPages();
+      renderPages({ preserveView: true });
       state.swipeStart = null;
+      state.dragStart = null;
       return;
     }
-    if (state.swipeStart && final && state.scale <= 1.15 && Date.now() - state.swipeStart.at < 700) {
+    if (!wasDragging && state.swipeStart && final && Date.now() - state.swipeStart.at < 700) {
       const dx = final.x - state.swipeStart.x;
       const dy = final.y - state.swipeStart.y;
       if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.3) changePage(state.page + (dx < 0 ? 1 : -1));
     }
     state.swipeStart = null;
+    state.dragStart = null;
   }
 
   window.FarbatlasPdfViewer = Object.freeze({ open, close, inspect });
