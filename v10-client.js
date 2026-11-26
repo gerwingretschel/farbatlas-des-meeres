@@ -218,6 +218,53 @@
     throw new Error(`Bild konnte nicht auf höchstens ${formatBytes(maxBytes)} verkleinert werden.`);
   }
 
+  function assertPreparedPair(item) {
+    const teachingBytes = Number(item?.teachingBlob?.size || item?.teachingBytes || 0);
+    const thumbnailBytes = Number(item?.thumbnailBlob?.size || item?.thumbnailBytes || 0);
+    const teachingEdge = Math.max(Number(item?.teachingWidth || 0), Number(item?.teachingHeight || 0));
+    const thumbnailEdge = Math.max(Number(item?.thumbnailWidth || 0), Number(item?.thumbnailHeight || 0));
+    if (!teachingBytes || teachingBytes > RULES.teachingMaxBytes || !teachingEdge || teachingEdge > RULES.teachingMaxEdge) {
+      throw new Error('Die Unterrichtsversion erfüllt 1.600 px / 400 KB nicht.');
+    }
+    if (!thumbnailBytes || thumbnailBytes > RULES.thumbnailMaxBytes || !thumbnailEdge || thumbnailEdge > RULES.thumbnailMaxEdge) {
+      throw new Error('Das Vorschaubild erfüllt die Thumbnail-Grenzen nicht.');
+    }
+    return {
+      teaching: { bytes: teachingBytes, maxEdge: teachingEdge },
+      thumbnail: { bytes: thumbnailBytes, maxEdge: thumbnailEdge },
+    };
+  }
+
+  function importPreparationSummary(items, invalid = 0, failed = 0) {
+    const pending = (Array.isArray(items) ? items : []).filter((item) => item && !item.imageKey && !String(item.name || '').startsWith('dummy_'));
+    const prepared = pending.filter((item) => {
+      try { assertPreparedPair(item); return true; } catch { return false; }
+    });
+    return {
+      total: pending.length + Number(invalid || 0) + Number(failed || 0),
+      prepared: prepared.length,
+      invalid: Number(invalid || 0),
+      failed: Number(failed || 0),
+      pending: pending.length,
+    };
+  }
+
+  function updateImportPreparationDisplay(summary, statusElement = q('#importTitle')) {
+    const total = Math.max(0, Number(summary?.total || 0));
+    const prepared = Math.max(0, Number(summary?.prepared || 0));
+    const invalid = Math.max(0, Number(summary?.invalid || 0));
+    const failed = Math.max(0, Number(summary?.failed || 0));
+    const completed = prepared + invalid + failed;
+    const percent = total ? Math.round(completed / total * 100) : 0;
+    if (statusElement) statusElement.innerHTML = `<b>${prepared} neue Bilder sind als Unterrichtsbild und Vorschaubild für die Übertragung vorbereitet.</b>`;
+    if (q('#progressBar')) q('#progressBar').style.width = `${percent}%`;
+    if (q('#progressText')) q('#progressText').textContent = `${percent} % · ${completed} von ${total} Bildern vorbereitet`;
+    if (q('#mTotal')) q('#mTotal').textContent = total;
+    if (q('#mOk')) q('#mOk').textContent = prepared;
+    if (q('#mInvalid')) q('#mInvalid').textContent = invalid;
+    if (q('#mFailed')) q('#mFailed').textContent = failed;
+  }
+
   async function preparePair(item) {
     if (item.preparedImport && item.teachingBlob && item.thumbnailBlob) return item;
     const source = item.file instanceof Blob
@@ -248,23 +295,29 @@
     item.preparedImport = true;
     item.pendingUpload = true;
     item.file = undefined;
+    assertPreparedPair(item);
     return item;
   }
 
-  async function preparePendingImports(statusElement = q('#importTitle')) {
+  async function preparePendingImports(statusElement = q('#importTitle'), importState = null) {
     if (importPreparation) return importPreparation;
-    const pending = imported.filter((item) => item && !item.imageKey && !String(item.name || '').startsWith('dummy_'));
-    if (!pending.length) return 0;
     importPreparation = (async () => {
-      for (let index = 0; index < pending.length; index += 1) {
-        if (statusElement) statusElement.innerHTML = `<b>Bild ${index + 1} von ${pending.length}: Unterrichtsbild und Vorschaubild werden vorbereitet …</b>`;
-        await preparePair(pending[index]);
+      let completedThisRun = 0;
+      while (true) {
+        const pending = imported.filter((item) => item && !item.imageKey && !item.preparedImport && !String(item.name || '').startsWith('dummy_'));
+        if (!pending.length) break;
+        for (let index = 0; index < pending.length; index += 1) {
+          if (statusElement) statusElement.innerHTML = `<b>Bild ${completedThisRun + 1}: Unterrichtsbild bis 1.600 px / 400 KB und Vorschaubild werden erzeugt …</b>`;
+          await preparePair(pending[index]);
+          completedThisRun += 1;
+        }
       }
       if (typeof rebuild === 'function') rebuild();
       if (typeof scheduleDatasetCache === 'function') scheduleDatasetCache();
       updatePendingNotice();
-      if (statusElement) statusElement.innerHTML = `<b>${pending.length} neue Bilder sind für die Übertragung vorbereitet.</b>`;
-      return pending.length;
+      const summary = importPreparationSummary(imported, importState?.invalid, importState?.failed);
+      updateImportPreparationDisplay(summary, statusElement);
+      return summary.prepared;
     })().finally(() => { importPreparation = null; });
     return importPreparation;
   }
@@ -303,6 +356,7 @@
     const pending = imported.filter((item) => !item.imageKey && !String(item.name || '').startsWith('dummy_'));
     for (let index = 0; index < pending.length; index += 1) {
       const item = pending[index];
+      assertPreparedPair(item);
       status.textContent = `Bild ${index + 1} von ${pending.length} wird als Unterrichtsbild und Vorschaubild gespeichert …`;
       const uploaded = await api('upload-image-pair', {
         name,
@@ -317,7 +371,15 @@
         thumbnailWidth: item.thumbnailWidth,
         thumbnailHeight: item.thumbnailHeight,
       });
-      Object.assign(item, uploaded, { pendingUpload: false });
+      if (!uploaded.imageKey || !uploaded.thumbnailKey || uploaded.imageKey === uploaded.thumbnailKey) {
+        throw new Error(`Bildpaar „${item.name}“ wurde nicht eindeutig gespeichert.`);
+      }
+      Object.assign(item, uploaded, {
+        pendingUpload: false,
+        pairId: uploaded.imageKey,
+        src: await blobToDataUrl(item.teachingBlob),
+        thumbnailSrc: await blobToDataUrl(item.thumbnailBlob),
+      });
     }
     updatePendingNotice();
     return pending.length;
@@ -494,6 +556,18 @@
     previous: THUMBNAIL_PREFETCH_PREVIOUS,
   });
 
+  window.FarbatlasImportDiagnostics = Object.freeze({
+    summarize: importPreparationSummary,
+    validatePair: assertPreparedPair,
+    displayKey: (item, view) => view === 'thumbnail' ? item?.thumbnailKey : item?.imageKey,
+    limits: Object.freeze({
+      teachingMaxEdge: RULES.teachingMaxEdge,
+      teachingMaxBytes: RULES.teachingMaxBytes,
+      thumbnailMaxEdge: RULES.thumbnailMaxEdge,
+      thumbnailMaxBytes: RULES.thumbnailMaxBytes,
+    }),
+  });
+
   const observer = typeof IntersectionObserver === 'function'
     ? new IntersectionObserver((entries) => entries.forEach((entry) => {
       if (!entry.isIntersecting) return;
@@ -566,7 +640,9 @@
         const generation = ++galleryGeneration;
         const record = gallerySet?.[galleryIndex];
         const item = itemFor(record);
-        if (!record || !item?.imageKey) return originalRender();
+        if (!record || !item) return originalRender();
+        const hasTeachingVersion = Boolean(item.imageKey || item.teachingBlob || item.preparedImport);
+        if (!hasTeachingVersion) return originalRender();
         scheduleThumbnailPrefetch(gallerySet, galleryIndex);
         let thumbnail = record.src;
         try { thumbnail = await assetUrl(item, 'thumbnail'); } catch { /* thumbnail remains placeholder */ }
@@ -609,7 +685,7 @@
       const originalFinish = finishIf;
       finishIf = function farbatlasFinishImport(state) {
         originalFinish(state);
-        if (state.done === state.total && state.ok) preparePendingImports().catch((error) => {
+        if (state.done === state.total && state.ok) preparePendingImports(q('#importTitle'), state).catch((error) => {
           const box = q('#importBox');
           if (box) box.className = 'import-box error';
           if (q('#importTitle')) q('#importTitle').innerHTML = `<b>Bildvorbereitung fehlgeschlagen: ${escapeHtml(error.message)}</b>`;

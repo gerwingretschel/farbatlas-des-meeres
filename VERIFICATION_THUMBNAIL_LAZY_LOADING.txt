@@ -3,7 +3,7 @@ Stand: 2026-11-26
 
 ERGEBNIS
 - node --check: erfolgreich
-- node --test: 32 bestanden, 0 fehlgeschlagen
+- node --test: 38 bestanden, 0 fehlgeschlagen
 - node inject-v10.mjs: erfolgreich
 
 ABGEDECKTE SICHERHEITSREGELN
@@ -24,6 +24,11 @@ ABGEDECKTE SICHERHEITSREGELN
 - Datensparmodus verlangt eine bewusste Aktion vor dem Laden des Unterrichtsbilds.
 - Offline-Vorbereitung bietet Vorschaubild- und Komplettstufe.
 - Neuer Import erzeugt und überträgt Unterrichtsbild und Vorschaubild als Paar.
+- Mehrfachimport zählt alle noch nicht übertragenen Bilder konsistent; vier vorbereitete Bilder ergeben vier ausgewählte und vier importierte Ergebnisse.
+- Jede erzeugte Unterrichtsversion wird clientseitig nochmals auf höchstens 1.600 px und 400 KB geprüft.
+- Jedes Thumbnail wird clientseitig nochmals auf höchstens 480 px und 80 KB geprüft.
+- Lokale Kartenansicht verwendet die Thumbnail-Variante; lokale Großansicht verwendet die Unterrichtsversion.
+- Nach Upload werden unterschiedliche `imageKey`- und `thumbnailKey`-Werte verlangt und gemeinsam in der Datensatzreferenz gespeichert.
 
 REGRESSIONEN
 - Bestehende Kursleiter-, Bildkomprimierungs- und Hilfsfunktionen: Tests bestanden.
@@ -37,6 +42,9 @@ NOCH IM ECHTEN BRANCH-DEPLOY ZU PRÜFEN
 - Erzeugung des vollständigen Thumbnail-Bestands.
 - Übertragungsvolumen und Startzeit vorher/nachher.
 - Netzwerkprüfung des Thumbnail-Fensters sowie Nachweis, dass keine benachbarten Unterrichtsbilder vorgeladen werden.
+- Mehrfachimportanzeige mit mindestens vier gleichzeitig ausgewählten Dateien.
+- Pixel- und Dateigrößenprüfung eines großen Smartphonefotos vor und nach erneutem Öffnen des gespeicherten Datensatzes.
+- Netzwerkprüfung, dass Karten- und Großansicht unterschiedliche, korrekt zugeordnete Bildschlüssel verwenden.
 - Mobile Darstellung und langsame Verbindung.
 - Beide Offline-Stufen auf demselben Gerät/Browser.
 - Stichproben der bestehenden Unterrichtsbilder.

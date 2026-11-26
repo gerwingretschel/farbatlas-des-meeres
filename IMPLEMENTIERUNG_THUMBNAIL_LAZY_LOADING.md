@@ -15,6 +15,25 @@ Die korrigierte Fassung:
 - behandelt die Browseranzeige „online/offline“ nicht mehr als verlässliche Sperre für einen möglichen Netzwerkabruf,
 - verwendet weder beim sichtbaren Thumbnail-Laden noch beim Prefetch Unterrichtsbilder als Ersatz.
 
+## Korrektur der Importintegration
+
+Der Offline-/Mehrfachimport hatte drei miteinander verbundene Integrationsfehler:
+
+1. Die ursprüngliche Importanzeige beschrieb nur die zuletzt ausgewählte Browser-Dateigruppe, während die nachgeschaltete Bildvorbereitung alle noch nicht übertragenen Bilder verarbeitete. Dadurch konnten gleichzeitig „4 vorbereitet“ und „1 von 1“ erscheinen.
+2. Ein lokal vorbereitetes Bild ohne Server-Schlüssel fiel in der Großansicht auf den alten Darstellungsweg zurück. Damit war nicht zuverlässig garantiert, dass dort die neu erzeugte Unterrichtsversion verwendet wurde.
+3. Die Zuordnung wurde nach dem Upload nicht ausdrücklich auf zwei unterschiedliche Server-Schlüssel geprüft.
+
+Die korrigierte Fassung:
+
+- zählt im Fortschrittsmodul den vollständigen Satz noch nicht übertragener Importbilder,
+- zeigt Gesamtzahl, erfolgreich vorbereitete, ungültige und nicht lesbare Bilder konsistent an,
+- verarbeitet auch während eines laufenden Vorbereitungsvorgangs hinzugekommene Importbilder,
+- validiert nach der Erzeugung nochmals Unterrichtsversion und Thumbnail,
+- verwendet bei lokalen Importen auf Karten ausschließlich `thumbnailBlob`/`thumbnailSrc`,
+- verwendet in der Großansicht ausschließlich `teachingBlob` beziehungsweise nach dem Upload `imageKey`,
+- verlangt nach dem Serverupload zwei vorhandene und unterschiedliche Schlüssel (`imageKey` und `thumbnailKey`),
+- speichert beide Schlüssel anschließend gemeinsam in derselben Bildreferenz des Datensatzes.
+
 ## Verbindliche Bildarchitektur
 
 - **Unterrichtsbild:** JPEG, längste Kante höchstens 1.600 px, höchstens 400 KB, keine Hochskalierung.
@@ -76,6 +95,7 @@ Die korrigierte Fassung:
 - `test/thumbnail-integration.test.mjs` – Integrations- und Sicherheitsprüfungen.
 - `test/thumbnail-prefetch.test.mjs` – exakte Fenstergröße, Randfälle und Ausschluss von Unterrichtsbildern beim Vorladen.
 - `test/thumbnail-first-load.test.mjs` – Regressionstest: ein zuvor nicht gespeichertes sichtbares Thumbnail wird erstmals vom Server geladen und ersetzt den Platzhalter.
+- `test/import-pipeline.test.mjs` – Mehrfachimport, konsistente Zählung, Grenzwerte und getrennte Speicherung/Zuordnung beider Bildvarianten.
 
 ## Aktualisierung auf dem bestehenden Branch
 
@@ -101,7 +121,7 @@ npm run build
 Erwartung:
 
 - Syntaxprüfung ohne Fehler.
-- 32 Tests bestanden, 0 fehlgeschlagen.
+- 38 Tests bestanden, 0 fehlgeschlagen.
 - Build erfolgreich.
 
 Danach in GitHub Desktop committen:
@@ -127,5 +147,8 @@ Anschließend `Push origin` ausführen. Erst den separaten Netlify-Branch-Deploy
 11. **Offline komplett:** Mit einer kleinen Testbibliothek zusätzlich Detailbilder vorbereiten und offline öffnen.
 12. **Offline-Foto:** Verbindung trennen, Foto importieren, Hinweis „nur auf diesem Gerät“ prüfen, Verbindung wiederherstellen und Datensatz bis zur Erfolgsmeldung speichern.
 13. **Bestehende Unterrichtsbilder:** Stichproben in der Detailansicht prüfen. Die Thumbnail-Erzeugung darf sie nicht verändert haben.
+14. **Mehrfachimport:** Vier neue Fotos gemeinsam auswählen. Erwartung nach der Vorbereitung: `100 % · 4 von 4 Bildern vorbereitet`, `4 ausgewählt`, `4 importiert`, sofern keine Datei ungültig oder unlesbar war.
+15. **Unterrichtsversion:** Ein Smartphonefoto mit deutlich mehr als 1.600 Pixeln und mehr als 400 KB importieren. In der Großansicht und nach erneutem Öffnen des gespeicherten Datensatzes muss die Unterrichtsversion höchstens 1.600 Pixel und höchstens 400 KB haben.
+16. **Getrennte Varianten:** In der Kartenansicht muss das Thumbnail verwendet werden; erst die Großansicht darf die zugehörige Unterrichtsversion laden. Im Netzwerkprotokoll müssen dafür unterschiedliche Bildschlüssel erscheinen.
 
 Erst nach erfolgreicher Abnahme: Pull Request erstellen, Netlify Deploy Preview prüfen und anschließend nach `main` mergen.
