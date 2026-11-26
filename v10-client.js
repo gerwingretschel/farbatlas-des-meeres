@@ -36,7 +36,9 @@
   const observedImages = new WeakSet();
   let galleryGeneration = 0;
   let thumbnailPrefetchGeneration = 0;
-  let importPreparation = null;
+  let importPreparation = Promise.resolve();
+  let currentImportRun = null;
+  let importRunSequence = 0;
   let pendingSync = null;
   let dataSaver = typeof localStorage !== 'undefined' && localStorage.getItem(DATA_SAVER_KEY) === '1';
 
@@ -163,11 +165,17 @@
 
   async function assetBlob(item, variant, { allowNetwork = true } = {}) {
     const localField = variant === 'thumbnail' ? 'thumbnailBlob' : 'teachingBlob';
-    const sourceField = variant === 'thumbnail' ? 'thumbnailSrc' : 'src';
+    const sourceField = variant === 'thumbnail' ? 'thumbnailSrc' : 'teachingSrc';
     const keyField = variant === 'thumbnail' ? 'thumbnailKey' : 'imageKey';
     if (item?.[localField] instanceof Blob) return item[localField];
-    if (!item?.[keyField] && /^data:/i.test(String(item?.[sourceField] || ''))) {
-      return fetch(item[sourceField]).then((response) => response.blob());
+    if (item?.preparedImport && !item?.[keyField]) {
+      throw new Error(variant === 'thumbnail'
+        ? 'Das vorbereitete Vorschaubild fehlt lokal. Bitte das Originalfoto erneut importieren.'
+        : 'Die vorbereitete Unterrichtsversion fehlt lokal. Bitte das Originalfoto erneut importieren.');
+    }
+    const localSource = item?.[sourceField] || (variant === 'teaching' ? item?.src : '');
+    if (!item?.[keyField] && /^data:/i.test(String(localSource || ''))) {
+      return fetch(localSource).then((response) => response.blob());
     }
     const key = item?.[keyField];
     if (!key) throw new Error(variant === 'thumbnail' ? 'Für dieses Bild fehlt noch ein Vorschaubild.' : 'Unterrichtsbild fehlt.');
@@ -277,14 +285,16 @@
     };
   }
 
-  function importPreparationSummary(items, invalid = 0, failed = 0) {
+  function importPreparationSummary(items, invalid = 0, failed = 0, selectedTotal = null) {
     const deleted = typeof deletedRecords !== 'undefined' && deletedRecords instanceof Set ? deletedRecords : new Set();
     const pending = (Array.isArray(items) ? items : []).filter((item) => item && !item.imageKey && !deleted.has(item.name) && !String(item.name || '').startsWith('dummy_'));
     const prepared = pending.filter((item) => {
       try { assertPreparedPair(item); return true; } catch { return false; }
     });
     return {
-      total: pending.length + Number(invalid || 0) + Number(failed || 0),
+      total: selectedTotal !== null && selectedTotal !== undefined && Number.isInteger(Number(selectedTotal)) && Number(selectedTotal) >= 0
+        ? Number(selectedTotal)
+        : pending.length + Number(invalid || 0) + Number(failed || 0),
       prepared: prepared.length,
       invalid: Number(invalid || 0),
       failed: Number(failed || 0),
@@ -292,24 +302,48 @@
     };
   }
 
-  function updateImportPreparationDisplay(summary, statusElement = q('#importTitle')) {
+  function itemsAddedSince(items, previousItems) {
+    const before = previousItems instanceof Set ? previousItems : new Set(previousItems || []);
+    return (Array.isArray(items) ? items : []).filter((item) => !before.has(item));
+  }
+
+  function importDisplayModel(summary) {
     const total = Math.max(0, Number(summary?.total || 0));
     const prepared = Math.max(0, Number(summary?.prepared || 0));
     const invalid = Math.max(0, Number(summary?.invalid || 0));
     const failed = Math.max(0, Number(summary?.failed || 0));
     const completed = prepared + invalid + failed;
     const percent = total ? Math.round(completed / total * 100) : 0;
-    if (statusElement) statusElement.innerHTML = `<b>${prepared} neue Bilder sind als Unterrichtsbild und Vorschaubild für die Übertragung vorbereitet.</b>`;
-    if (q('#progressBar')) q('#progressBar').style.width = `${percent}%`;
-    if (q('#progressText')) q('#progressText').textContent = `${percent} % · ${completed} von ${total} Bildern vorbereitet`;
-    if (q('#mTotal')) q('#mTotal').textContent = total;
-    if (q('#mOk')) q('#mOk').textContent = prepared;
-    if (q('#mInvalid')) q('#mInvalid').textContent = invalid;
-    if (q('#mFailed')) q('#mFailed').textContent = failed;
+    return {
+      total,
+      prepared,
+      invalid,
+      failed,
+      completed,
+      percent,
+      title: prepared === 1
+        ? '1 neues Bild ist als Unterrichtsbild und Vorschaubild für die Übertragung vorbereitet.'
+        : `${prepared} neue Bilder sind als Unterrichtsbild und Vorschaubild für die Übertragung vorbereitet.`,
+      progress: `${percent} % · ${completed} von ${total} Bildern vorbereitet`,
+    };
+  }
+
+  function updateImportPreparationDisplay(summary, statusElement = q('#importTitle')) {
+    const model = importDisplayModel(summary);
+    if (statusElement) statusElement.innerHTML = `<b>${model.title}</b>`;
+    if (q('#progressBar')) q('#progressBar').style.width = `${model.percent}%`;
+    if (q('#progressText')) q('#progressText').textContent = model.progress;
+    if (q('#mTotal')) q('#mTotal').textContent = model.total;
+    if (q('#mOk')) q('#mOk').textContent = model.prepared;
+    if (q('#mInvalid')) q('#mInvalid').textContent = model.invalid;
+    if (q('#mFailed')) q('#mFailed').textContent = model.failed;
   }
 
   async function preparePair(item) {
-    if (item.preparedImport && item.teachingBlob && item.thumbnailBlob) return item;
+    if (item.preparedImport && item.teachingBlob && item.thumbnailBlob) {
+      assertPreparedPair(item);
+      return item;
+    }
     const source = item.file instanceof Blob
       ? item.file
       : await fetch(item.src).then((response) => response.blob());
@@ -327,7 +361,8 @@
     });
     item.teachingBlob = teaching.blob;
     item.thumbnailBlob = thumbnail.blob;
-    item.src = await blobToDataUrl(teaching.blob);
+    item.teachingSrc = await blobToDataUrl(teaching.blob);
+    item.src = item.teachingSrc;
     item.thumbnailSrc = await blobToDataUrl(thumbnail.blob);
     item.teachingBytes = teaching.blob.size;
     item.thumbnailBytes = thumbnail.blob.size;
@@ -342,28 +377,34 @@
     return item;
   }
 
-  async function preparePendingImports(statusElement = q('#importTitle'), importState = null) {
-    if (importPreparation) return importPreparation;
-    importPreparation = (async () => {
-      let completedThisRun = 0;
-      while (true) {
-        const pending = imported.filter((item) => item && !item.imageKey && !item.preparedImport && !deletedRecords.has(item.name) && !String(item.name || '').startsWith('dummy_'));
-        if (!pending.length) break;
-        for (let index = 0; index < pending.length; index += 1) {
-          if (statusElement) statusElement.innerHTML = `<b>Bild ${completedThisRun + 1}: Unterrichtsbild bis 1.600 px / 400 KB und Vorschaubild werden erzeugt …</b>`;
-          await preparePair(pending[index]);
-          completedThisRun += 1;
-        }
+  function enqueueImportPreparation(items, statusElement = q('#importTitle'), importState = null, updateDisplay = true) {
+    const runItems = [...new Set((Array.isArray(items) ? items : []).filter((item) => item && !item.imageKey && !deletedRecords.has(item.name) && !String(item.name || '').startsWith('dummy_')))];
+    const work = async () => {
+      for (let index = 0; index < runItems.length; index += 1) {
+        if (statusElement) statusElement.innerHTML = `<b>Bild ${index + 1} von ${runItems.length}: Unterrichtsbild bis 1.600 px / 400 KB und Vorschaubild werden erzeugt …</b>`;
+        await preparePair(runItems[index]);
       }
       if (typeof rebuild === 'function') rebuild();
       if (typeof scheduleDatasetCache === 'function') scheduleDatasetCache();
       updatePendingNotice();
-      const summary = importPreparationSummary(imported, importState?.invalid, importState?.failed);
-      updateImportPreparationDisplay(summary, statusElement);
+      const summary = importPreparationSummary(
+        runItems,
+        importState?.invalid,
+        importState?.failed,
+        importState?.total ?? runItems.length
+      );
+      if (updateDisplay) updateImportPreparationDisplay(summary, statusElement);
       if (summary.prepared) await persistPendingSync('Neue Bilder warten auf die Synchronisierung');
       return summary.prepared;
-    })().finally(() => { importPreparation = null; });
+    };
+    importPreparation = importPreparation.catch(() => {}).then(work);
     return importPreparation;
+  }
+
+  async function preparePendingImports(statusElement = q('#importTitle')) {
+    const pending = imported.filter((item) => item && !item.imageKey && !item.preparedImport && !deletedRecords.has(item.name) && !String(item.name || '').startsWith('dummy_'));
+    if (!pending.length) return importPreparation;
+    return enqueueImportPreparation(pending, statusElement, { total: pending.length, invalid: 0, failed: 0 }, false);
   }
 
   function meta() {
@@ -442,6 +483,9 @@
     if (!snapshot) return;
     pendingSync = snapshot;
     imported = Array.isArray(snapshot.imported) ? snapshot.imported : [];
+    imported.forEach((item) => {
+      if (item?.teachingSrc) item.src = item.teachingSrc;
+    });
     savedGroups = snapshot.savedGroups || {};
     groupMoves = snapshot.groupMoves || {};
     recordEdits = snapshot.recordEdits || {};
@@ -503,9 +547,10 @@
       Object.assign(item, uploaded, {
         pendingUpload: true,
         pairId: uploaded.imageKey,
-        src: await blobToDataUrl(item.teachingBlob),
+        teachingSrc: await blobToDataUrl(item.teachingBlob),
         thumbnailSrc: await blobToDataUrl(item.thumbnailBlob),
       });
+      item.src = item.teachingSrc;
       await persistPendingSync('Neue Bilder warten auf die Synchronisierung');
     }
     updatePendingNotice();
@@ -724,8 +769,11 @@
 
   window.FarbatlasImportDiagnostics = Object.freeze({
     summarize: importPreparationSummary,
+    itemsAddedSince,
+    displayModel: importDisplayModel,
     validatePair: assertPreparedPair,
     displayKey: (item, view) => view === 'thumbnail' ? item?.thumbnailKey : item?.imageKey,
+    localDisplaySource: (item, view) => view === 'thumbnail' ? item?.thumbnailSrc : item?.teachingSrc,
     limits: Object.freeze({
       teachingMaxEdge: RULES.teachingMaxEdge,
       teachingMaxBytes: RULES.teachingMaxBytes,
@@ -783,6 +831,19 @@
   }
 
   function installGlobalBridges() {
+    if (typeof importFiles === 'function' && !importFiles.__farbatlasRunScoped) {
+      const originalImportFiles = importFiles;
+      importFiles = function farbatlasImportFiles(fileList, source) {
+        currentImportRun = {
+          id: ++importRunSequence,
+          before: new Set(Array.isArray(imported) ? imported : []),
+          selectedTotal: Number(fileList?.length || 0),
+          source,
+        };
+        return originalImportFiles(fileList, source);
+      };
+      importFiles.__farbatlasRunScoped = true;
+    }
     if (typeof deleteCard === 'function' && !deleteCard.__farbatlasOfflineSync) {
       const originalDeleteCard = deleteCard;
       deleteCard = function farbatlasDeleteCard(kind, value) {
@@ -863,7 +924,17 @@
       const originalFinish = finishIf;
       finishIf = function farbatlasFinishImport(state) {
         originalFinish(state);
-        if (state.done === state.total && state.ok) preparePendingImports(q('#importTitle'), state).catch((error) => {
+        if (state.done !== state.total) return;
+        const run = currentImportRun;
+        currentImportRun = null;
+        const runItems = run
+          ? itemsAddedSince(imported, run.before)
+          : imported.filter((item) => !item.imageKey).slice(-Number(state.ok || 0));
+        enqueueImportPreparation(runItems, q('#importTitle'), {
+          total: run?.selectedTotal ?? state.total,
+          invalid: state.invalid,
+          failed: state.failed,
+        }, true).catch((error) => {
           const box = q('#importBox');
           if (box) box.className = 'import-box error';
           if (q('#importTitle')) q('#importTitle').innerHTML = `<b>Bildvorbereitung fehlgeschlagen: ${escapeHtml(error.message)}</b>`;

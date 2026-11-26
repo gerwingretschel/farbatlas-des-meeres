@@ -1,5 +1,5 @@
 /* Farbatlas: kleine App-Grundlage für vorbereitete Offline-Bibliotheken */
-const CACHE = 'farbatlas-app-shell-v11';
+const CACHE = 'farbatlas-app-shell-v12-import-sync-merged';
 const SHELL = [
   '/',
   '/index.html',
@@ -39,13 +39,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      if (response.ok) {
-        const copy = response.clone();
-        caches.open(CACHE).then((cache) => cache.put(request, copy));
-      }
-      return response;
-    }))
-  );
+  const isApplicationCode = ['/v10-client.js', '/course-leader-client.js', '/image-compression-client.js', '/farbatlas-sw.js'].includes(url.pathname);
+  if (isApplicationCode) {
+    event.respondWith(
+      fetch(request, { cache: 'no-store' }).then((response) => {
+        if (response.ok) caches.open(CACHE).then((cache) => cache.put(request, response.clone()));
+        return response;
+      }).catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => {
+    if (response.ok) caches.open(CACHE).then((cache) => cache.put(request, response.clone()));
+    return response;
+  })));
 });

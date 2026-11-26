@@ -3,7 +3,7 @@ Stand: 2026-11-26
 
 ERGEBNIS
 - node --check: erfolgreich
-- node --test: 44 bestanden, 0 fehlgeschlagen
+- node --test: 50 bestanden, 0 fehlgeschlagen
 - node inject-v10.mjs: erfolgreich
 
 ABGEDECKTE SICHERHEITSREGELN
@@ -35,6 +35,10 @@ ABGEDECKTE SICHERHEITSREGELN
 - Nach Wiederherstellung der Verbindung steht eine ausdrückliche Synchronisationsaktion bereit.
 - Client und Server vergleichen den geladenen Versionsstand; zwischenzeitliche Serveränderungen führen zu einem geschützten 409-Konflikt.
 - Bei Fehler oder Konflikt bleiben lokale Änderungen erhalten und der Serverstand wird nicht still überschrieben.
+- Basisabgleich gegen Farbatlas_des_Meeres_Audit_2026-11-26_132904.txt durchgeführt; v5-Synchronisation und serverseitiger Konfliktschutz wurden nicht zurückgesetzt.
+- Jeder Aufruf von `importFiles()` erhält einen eigenen Ergebnisbereich; nachfolgende Läufe verwenden ausschließlich ihre neu hinzugefügten Bildobjekte und ihre eigene Dateizahl.
+- `teachingSrc` und `thumbnailSrc` sind getrennte lokale Rollen; die Großansicht besitzt keinen stillen Thumbnail-Fallback.
+- Service Worker nutzt einen neuen Cache-Namen und lädt Anwendungsskripte network-first mit `cache: no-store`, sodass kein gemischter v4/v5-Scriptstand bestehen bleibt.
 
 REGRESSIONEN
 - Bestehende Kursleiter-, Bildkomprimierungs- und Hilfsfunktionen: Tests bestanden.

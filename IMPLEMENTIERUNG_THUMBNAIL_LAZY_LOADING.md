@@ -2,6 +2,34 @@
 
 Stand: 26. November 2026
 
+## Verbindliche Codebasis dieser Korrektur
+
+Diese Zusammenführung wurde ausdrücklich gegen den Projektstand aus `Farbatlas_des_Meeres_Audit_2026-11-26_132904.txt` erstellt. Der Audit-Stand enthält bereits:
+
+- die v5-Offlinesynchronisation in `v10-client.js`,
+- `preparePair()` für Unterrichtsbild und Thumbnail,
+- die Brücke zum ursprünglichen `importFiles()`/`finishIf()`-Ablauf aus `index.html`,
+- `upload-image-pair` und den `expectedVersionTag`-Konfliktschutz im Netlify-Server.
+
+Die Korrektur ersetzt diese Bestandteile nicht durch einen älteren Stand. Sie ändert gezielt die Importlauf-Abgrenzung, die lokale Variantenbindung und die Auslieferung aktualisierter Anwendungsskripte. Der Serverstand aus dem Audit bleibt einschließlich Pair-Upload und Konfliktschutz erhalten.
+
+## Ursache der erneuten v4/v5-Regression
+
+Die Regression entstand aus drei Integrationspunkten:
+
+1. Die `finishIf()`-Brücke bereitete kumulativ alle noch nicht übertragenen Bilder vor, während die ursprüngliche Fortschrittsanzeige nur den aktuellen Aufruf von `importFiles()` kannte. Dadurch vermischten sich nacheinander ausgeführte Importläufe.
+2. Für lokale Bildquellen war `src` weiterhin ein mehrdeutiges Feld. Wenn der lokale Unterrichts-Blob nach einer Wiederherstellung nicht eindeutig verfügbar war, konnte die Großansicht auf eine kleine Datenquelle zurückfallen.
+3. Der Service Worker verwendete weiterhin denselben Cache-Namen und lieferte Anwendungsskripte cache-first aus. Damit konnten nach einem Deploy unterschiedliche Generationen von Importpipeline und Offlinesynchronisation gemeinsam aktiv bleiben.
+
+Die zusammengeführte Fassung behebt dies durch:
+
+- einen eigenen Laufkontext pro `importFiles()`-Aufruf,
+- eine serialisierte Vorbereitungswarteschlange ohne Vermischung der Ergebniszahlen,
+- `teachingSrc`/`teachingBlob` ausschließlich für die Großansicht,
+- `thumbnailSrc`/`thumbnailBlob` ausschließlich für Karten, Lernen und Prefetch,
+- einen harten Fehler statt eines stillen Thumbnail-Fallbacks, falls eine vorbereitete Unterrichtsversion lokal fehlen sollte,
+- einen neuen Service-Worker-Cache und network-first/no-store für Anwendungsskripte.
+
 ## Korrektur des Erstladefehlers
 
 Die fehlerhafte Fassung entfernte ein sichtbares Bild bereits beim ersten Sichtbarkeitsereignis aus der Beobachtung, noch bevor der asynchrone Abruf erfolgreich abgeschlossen war. Gleichzeitig verwendete der Prefetch einen anderen Ladeweg als die sichtbare Bildkarte. Ein vorübergehender oder konkurrierender Fehler ließ dadurch den Platzhalter dauerhaft stehen. Bereits lokal gespeicherte Thumbnails waren nicht betroffen.
@@ -118,6 +146,7 @@ Ein aus Unterrichtsbild und Thumbnail bestehendes Paar, das bereits hochgeladen 
 - `test/thumbnail-first-load.test.mjs` – Regressionstest: ein zuvor nicht gespeichertes sichtbares Thumbnail wird erstmals vom Server geladen und ersetzt den Platzhalter.
 - `test/import-pipeline.test.mjs` – Mehrfachimport, konsistente Zählung, Grenzwerte und getrennte Speicherung/Zuordnung beider Bildvarianten.
 - `test/offline-sync.test.mjs` – Login-HTML-Abwehr, Offline-Import plus Offline-Löschung, fehlgeschlagener Abschluss, spätere Synchronisierung und Versionskonflikt.
+- `test/import-offline-merged.test.mjs` – gemeinsamer v4/v5-Regressionssatz: mehrere aufeinanderfolgende Importläufe, getrennte Varianten, Offline-Plan und Schutz vor gemischten Scriptständen.
 
 ## Aktualisierung auf dem bestehenden Branch
 
@@ -143,7 +172,7 @@ npm run build
 Erwartung:
 
 - Syntaxprüfung ohne Fehler.
-- 44 Tests bestanden, 0 fehlgeschlagen.
+- 50 Tests bestanden, 0 fehlgeschlagen.
 - Build erfolgreich.
 
 Danach in GitHub Desktop committen:
@@ -176,5 +205,7 @@ Anschließend `Push origin` ausführen. Erst den separaten Netlify-Branch-Deploy
 18. **Wiederverbinden:** Verbindung herstellen. Erwartung: verständlicher Hinweis und Schaltfläche „Ausstehende Änderungen synchronisieren“. Nach erfolgreicher Synchronisierung den Datensatz neu öffnen: neues Bild vorhanden, offline gelöschtes Testbild nicht mehr vorhanden.
 19. **Nicht erreichbarer/geschützter Deploy:** Eine HTML-Login-Antwort simulieren beziehungsweise mit aktivem Edge-Zugangsschutz testen. Im Statusbereich darf kein `<DOCTYPE>`, `<script>`, „Login Redirect“ oder Seitenquelltext erscheinen.
 20. **Konfliktschutz:** Zwischen Offline-Beginn und Synchronisierung denselben Serverdatensatz in einer zweiten Sitzung verändern. Die Synchronisierung muss mit einem Konflikthinweis stoppen; weder lokaler noch neuer Serverstand darf still überschrieben werden.
+21. **Aufeinanderfolgende Importläufe:** Zuerst zwei Bilder importieren, danach in einem neuen Auswahlvorgang ein einzelnes Bild. Die zweite Ergebnisanzeige muss ausschließlich `1 von 1` und `1 importiert` zeigen; die vorherigen beiden Bilder dürfen die Anzeige des zweiten Laufs nicht erhöhen.
+22. **Aktualisierungsprüfung:** Nach dem Deploy Preview einmal neu laden. Im Netzwerkprotokoll muss `v10-client.js` vom aktuellen Deploy geladen werden; eine alte cache-first-Version darf nicht weiterverwendet werden.
 
 Erst nach erfolgreicher Abnahme: Pull Request erstellen, Netlify Deploy Preview prüfen und anschließend nach `main` mergen.
