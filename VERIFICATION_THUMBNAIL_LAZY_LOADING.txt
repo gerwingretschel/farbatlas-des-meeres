@@ -1,0 +1,63 @@
+FARBATLAS DES MEERES – VERIFIKATION THUMBNAIL / LAZY LOADING
+Stand: 2026-11-26
+
+ERGEBNIS
+- node --check: erfolgreich
+- node --test: 50 bestanden, 0 fehlgeschlagen
+- node inject-v10.mjs: erfolgreich
+
+ABGEDECKTE SICHERHEITSREGELN
+- Öffnen eines V11-Datensatzes lädt nur Metadaten, keine Unterrichtsbilder.
+- Unterrichtsbild: JPEG, max. 1.600 px, max. 400 KB.
+- Vorschaubild: JPEG/WebP serverseitig, max. 500 px, max. 90 KB.
+- Thumbnail-Schlüssel sind deterministisch und an Unterrichtsbild-Schlüssel gebunden.
+- Status unterscheidet aktuell, fehlend, veraltet, beschädigt und fehlendes Unterrichtsbild.
+- Thumbnail-Verwaltung schreibt ausschließlich den Thumbnail-Schlüssel; das Unterrichtsbild wird nur gelesen.
+- Änderung eines Unterrichtsbilds markiert ein vorhandenes Vorschaubild als veraltet.
+- Lazy Loading verwendet IntersectionObserver.
+- Beim Anzeigen eines Referenzbilds wird exakt das Thumbnail-Fenster „aktuell + 5 nächste + 2 vorherige“ im Hintergrund vorbereitet.
+- Das Vorladefenster wird an Serienanfang und -ende begrenzt und enthält keine Duplikate.
+- Der Vorladepfad ruft ausschließlich `thumbnail` ab und besitzt keinen Unterrichtsbild-Fallback.
+- Sichtbares Lazy Loading und Prefetch verwenden denselben URL-/In-flight-Mechanismus; Prefetch kann einen sichtbaren Erstabruf nicht blockieren.
+- Regressionstest bestätigt: Ein bisher nicht gespeichertes sichtbares Thumbnail wird über `get-image` geladen und ersetzt den Platzhalter.
+- Sichtbare Bilder werden erst nach erfolgreichem Laden aus der Beobachtung entfernt; vorübergehende Fehler erhalten begrenzte Wiederholungsversuche.
+- Datensparmodus verlangt eine bewusste Aktion vor dem Laden des Unterrichtsbilds.
+- Offline-Vorbereitung bietet Vorschaubild- und Komplettstufe.
+- Neuer Import erzeugt und überträgt Unterrichtsbild und Vorschaubild als Paar.
+- Mehrfachimport zählt alle noch nicht übertragenen Bilder konsistent; vier vorbereitete Bilder ergeben vier ausgewählte und vier importierte Ergebnisse.
+- Jede erzeugte Unterrichtsversion wird clientseitig nochmals auf höchstens 1.600 px und 400 KB geprüft.
+- Jedes Thumbnail wird clientseitig nochmals auf höchstens 480 px und 80 KB geprüft.
+- Lokale Kartenansicht verwendet die Thumbnail-Variante; lokale Großansicht verwendet die Unterrichtsversion.
+- Nach Upload werden unterschiedliche `imageKey`- und `thumbnailKey`-Werte verlangt und gemeinsam in der Datensatzreferenz gespeichert.
+- Netlify-Login-/Edge-Access-HTML wird als Zugangsproblem erkannt und niemals als HTML-Fehlertext angezeigt.
+- Offline-Importe und Offline-Löschungen werden gemeinsam in einem dauerhaften Pending-Sync-Snapshot erhalten.
+- Bereits hochgeladene Bildpaare bleiben bei fehlgeschlagenem Abschluss für den nächsten Synchronisationsversuch referenziert und werden nicht doppelt hochgeladen.
+- Nach Wiederherstellung der Verbindung steht eine ausdrückliche Synchronisationsaktion bereit.
+- Client und Server vergleichen den geladenen Versionsstand; zwischenzeitliche Serveränderungen führen zu einem geschützten 409-Konflikt.
+- Bei Fehler oder Konflikt bleiben lokale Änderungen erhalten und der Serverstand wird nicht still überschrieben.
+- Basisabgleich gegen Farbatlas_des_Meeres_Audit_2026-11-26_132904.txt durchgeführt; v5-Synchronisation und serverseitiger Konfliktschutz wurden nicht zurückgesetzt.
+- Jeder Aufruf von `importFiles()` erhält einen eigenen Ergebnisbereich; nachfolgende Läufe verwenden ausschließlich ihre neu hinzugefügten Bildobjekte und ihre eigene Dateizahl.
+- `teachingSrc` und `thumbnailSrc` sind getrennte lokale Rollen; die Großansicht besitzt keinen stillen Thumbnail-Fallback.
+- Service Worker nutzt einen neuen Cache-Namen und lädt Anwendungsskripte network-first mit `cache: no-store`, sodass kein gemischter v4/v5-Scriptstand bestehen bleibt.
+
+REGRESSIONEN
+- Bestehende Kursleiter-, Bildkomprimierungs- und Hilfsfunktionen: Tests bestanden.
+- Administrative Bildkomprimierung lädt für ihre Prüfung ausdrücklich Unterrichtsbilder und analysiert nicht versehentlich Vorschaubilder.
+
+UMGEBUNGSHINWEIS
+Die Paketinstallation über den Microsoft-internen npm-Proxy war in der Ausführungsumgebung mit HTTP 403 gesperrt. Syntaxprüfung, vollständige lokale Testsuite und Build liefen dennoch erfolgreich, da die dafür benötigten Projektdateien vorhanden waren. Auf dem Projekt-Mac bitte wie dokumentiert zuerst `npm install` ausführen.
+
+NOCH IM ECHTEN BRANCH-DEPLOY ZU PRÜFEN
+- Netlify Blobs mit dem produktionsnahen Datensatz „Rotes Meer“.
+- Erzeugung des vollständigen Thumbnail-Bestands.
+- Übertragungsvolumen und Startzeit vorher/nachher.
+- Netzwerkprüfung des Thumbnail-Fensters sowie Nachweis, dass keine benachbarten Unterrichtsbilder vorgeladen werden.
+- Mehrfachimportanzeige mit mindestens vier gleichzeitig ausgewählten Dateien.
+- Pixel- und Dateigrößenprüfung eines großen Smartphonefotos vor und nach erneutem Öffnen des gespeicherten Datensatzes.
+- Netzwerkprüfung, dass Karten- und Großansicht unterschiedliche, korrekt zugeordnete Bildschlüssel verwenden.
+- Offline-Kombination aus neuem Import und Löschung vorhandener Testbilder mit absichtlich nicht erreichbarem Server.
+- Wiederverbindungs- und Synchronisationstest einschließlich erneutem Öffnen des Datensatzes.
+- Konflikttest mit paralleler Serveränderung in einer zweiten Sitzung.
+- Mobile Darstellung und langsame Verbindung.
+- Beide Offline-Stufen auf demselben Gerät/Browser.
+- Stichproben der bestehenden Unterrichtsbilder.

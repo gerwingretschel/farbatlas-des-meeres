@@ -25,6 +25,12 @@ import {
   validateCompressionRunId,
   validateImageKey,
 } from "./lib/image-compression-utils.mjs";
+import {
+  imageSha256,
+  thumbnailCondition,
+  thumbnailKeyFor,
+  validateImageVariant,
+} from "./lib/thumbnail-utils.mjs";
 
 const STORES = Object.freeze({
   DATASETS: "farbatlas-datasets-v10",
@@ -61,6 +67,125 @@ function sessionSecret() {
     throw new ValidationError("SESSION_SECRET fehlt oder ist kürzer als 32 Zeichen.", 500);
   }
   return secret;
+}
+
+const imageReferences = (entry) => {
+  const images = entry?.data?.payload?.images;
+  return Array.isArray(images) ? images.filter((image) => image?.imageKey) : [];
+};
+
+async function thumbnailStatus(stores, entry) {
+  const references = imageReferences(entry);
+  const items = new Array(references.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(12, Math.max(1, references.length)) }, async () => {
+    while (cursor < references.length) {
+      const index = cursor++;
+      const reference = references[index];
+    const sourceEnvelope = await stores.images.getMetadata(reference.imageKey);
+    const sourceMetadata = sourceEnvelope?.metadata || null;
+    let thumbnailMetadata = null;
+    if (reference.thumbnailKey) {
+      thumbnailMetadata = (await stores.images.getMetadata(reference.thumbnailKey))?.metadata || null;
+    }
+    const condition = reference.thumbnailStale
+      ? "stale"
+      : thumbnailCondition({
+        reference,
+        sourceExists: Boolean(sourceEnvelope),
+        thumbnailExists: Boolean(thumbnailMetadata),
+        thumbnailMetadata,
+        sourceHash: reference.thumbnailSourceHash || thumbnailMetadata?.sourceSha256 || "",
+      });
+      items[index] = {
+      name: String(reference.name || "Bild"),
+      imageKey: reference.imageKey,
+      thumbnailKey: reference.thumbnailKey || null,
+      teachingBytes: Number(sourceMetadata?.bytes || reference.teachingBytes || 0),
+      thumbnailBytes: Number(thumbnailMetadata?.bytes || reference.thumbnailBytes || 0),
+        status: condition,
+      };
+    }
+  });
+  await Promise.all(workers);
+  const counts = items.reduce((result, item) => {
+    result[item.status] = (result[item.status] || 0) + 1;
+    return result;
+  }, { current: 0, missing: 0, stale: 0, damaged: 0, "source-missing": 0 });
+  return { items, counts, total: items.length };
+}
+
+async function attachThumbnail(stores, entry, body) {
+  const reference = datasetImage(entry, String(body.imageKey || ""));
+  const sourceBuffer = await stores.images.get(reference.imageKey, { type: "arrayBuffer" });
+  if (!sourceBuffer) throw new ValidationError("Unterrichtsbild nicht gefunden.", 404);
+  const sourceBytes = Buffer.from(sourceBuffer);
+  const thumbnail = validateImageVariant(body, "thumbnail");
+  const thumbnailKey = reference.thumbnailKey || thumbnailKeyFor(reference.imageKey);
+  await stores.images.set(thumbnailKey, thumbnail.bytes, {
+    metadata: {
+      dataset: datasetKey(entry.data.name),
+      fileName: String(reference.name || body.fileName || "thumbnail.jpg"),
+      contentType: thumbnail.contentType,
+      variant: "thumbnail",
+      sourceImageKey: reference.imageKey,
+      sourceSha256: imageSha256(sourceBytes),
+      bytes: thumbnail.bytes.length,
+      width: thumbnail.width,
+      height: thumbnail.height,
+      generatedAt: new Date().toISOString(),
+    },
+  });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const fresh = attempt ? await getDatasetEntry(stores.datasets, entry.data.name) : entry;
+    if (!fresh) throw new ValidationError("Datensatz nicht gefunden.", 404);
+    const images = imageReferences(fresh).map((image) => image.imageKey === reference.imageKey ? {
+      ...image,
+      thumbnailKey,
+      thumbnailBytes: thumbnail.bytes.length,
+      thumbnailWidth: thumbnail.width,
+      thumbnailHeight: thumbnail.height,
+      teachingBytes: sourceBytes.length,
+      thumbnailSourceHash: imageSha256(sourceBytes),
+      thumbnailStale: false,
+    } : image);
+    const next = {
+      ...fresh.data,
+      payload: { ...fresh.data.payload, version: Math.max(11, Number(fresh.data.payload?.version || 0)), images },
+      updatedAt: new Date().toISOString(),
+    };
+    const saved = await stores.datasets.setJSON(datasetKey(fresh.data.name), next, { onlyIfMatch: fresh.etag });
+    if (saved.modified) return {
+      imageKey: reference.imageKey,
+      thumbnailKey,
+      thumbnailBytes: thumbnail.bytes.length,
+      thumbnailWidth: thumbnail.width,
+      thumbnailHeight: thumbnail.height,
+      teachingBytes: sourceBytes.length,
+      thumbnailSourceHash: imageSha256(sourceBytes),
+      thumbnailStale: false,
+    };
+  }
+  throw new ValidationError("Datensatz wurde gleichzeitig geändert. Bitte die Thumbnail-Prüfung wiederholen.", 409);
+}
+
+async function markThumbnailStale(datasetStore, name, imageKey) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const entry = await getDatasetEntry(datasetStore, name);
+    if (!entry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+    const images = imageReferences(entry).map((image) => image.imageKey === imageKey
+      ? { ...image, thumbnailStale: Boolean(image.thumbnailKey) }
+      : image);
+    const next = {
+      ...entry.data,
+      payload: { ...entry.data.payload, images },
+      updatedAt: new Date().toISOString(),
+    };
+    const saved = await datasetStore.setJSON(datasetKey(name), next, { onlyIfMatch: entry.etag });
+    if (saved.modified) return;
+  }
+  throw new ValidationError("Datensatz wurde gleichzeitig geändert. Bild wurde nicht ersetzt.", 409);
 }
 
 const sign = (payload) =>
@@ -156,7 +281,7 @@ async function listDatasets(store) {
 
 async function deleteDatasetImages(imageStore, name) {
   const key = datasetKey(name);
-  const { blobs } = await imageStore.list();
+  const blobs = await listAllBlobs(imageStore, "", 5000);
   let deletedImages = 0;
   for (const blob of blobs) {
     const metadata = await imageStore.getMetadata(blob.key);
@@ -467,6 +592,24 @@ export default async (req) => {
 
     requireAdmin(actor);
 
+    if (body.action === "thumbnail-status") {
+      const name = normalizeName(body.name);
+      if (!name) throw new ValidationError("Datensatzname fehlt.");
+      const entry = await getDatasetEntry(stores.datasets, name);
+      if (!entry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+      return reply(await thumbnailStatus(stores, entry));
+    }
+    if (body.action === "upload-thumbnail") {
+      const name = normalizeName(body.name);
+      if (!name) throw new ValidationError("Datensatzname fehlt.");
+      const entry = await getDatasetEntry(stores.datasets, name);
+      if (!entry) throw new ValidationError("Datensatz nicht gefunden.", 404);
+      return reply({
+        image: await attachThumbnail(stores, entry, body),
+        message: "Vorschaubild wurde gespeichert und dem Unterrichtsbild zugeordnet.",
+      });
+    }
+
     if (body.action === "image-compression-runs") {
       const name = normalizeName(body.name);
       if (!name) throw new ValidationError("Datensatzname fehlt.");
@@ -583,6 +726,7 @@ export default async (req) => {
         return next;
       });
 
+      await markThumbnailStale(stores.datasets, run.datasetName, imageKey);
       await stores.images.set(imageKey, compressedBytes, {
         metadata: {
           ...sourceMetadata,
@@ -642,6 +786,7 @@ export default async (req) => {
         throw new ValidationError("Bild wurde nach der Komprimierung anderweitig verändert und wird nicht überschrieben.", 409);
       }
       if (currentHash !== item.originalHash) {
+        await markThumbnailStale(stores.datasets, run.datasetName, imageKey);
         await stores.images.set(imageKey, originalBytes, { metadata: item.originalMetadata || {} });
       }
       const restored = await mutateCompressionRun(stores.imageBackups, runId, (next) => {
@@ -779,6 +924,70 @@ export default async (req) => {
       });
       return reply({ imageKey: key });
     }
+    if (body.action === "upload-image-pair") {
+      const entry = await getDatasetEntry(stores.datasets, body.name);
+      if (!entry || passwordHash(body.password, entry.data.salt) !== entry.data.passwordHash) {
+        throw new ValidationError("Datensatz-Passwort ist falsch.", 401);
+      }
+      if (!body.fileName) throw new ValidationError("Dateiname fehlt.");
+      const teaching = validateImageVariant({
+        data: body.teachingData,
+        type: body.teachingType,
+        width: body.teachingWidth,
+        height: body.teachingHeight,
+      }, "teaching");
+      const thumbnail = validateImageVariant({
+        data: body.thumbnailData,
+        type: body.thumbnailType,
+        width: body.thumbnailWidth,
+        height: body.thumbnailHeight,
+      }, "thumbnail");
+      const imageKey = "image-" + crypto.randomUUID();
+      const thumbnailKey = thumbnailKeyFor(imageKey);
+      const dataset = datasetKey(body.name);
+      const sourceHash = imageSha256(teaching.bytes);
+      await stores.images.set(imageKey, teaching.bytes, {
+        metadata: {
+          contentType: teaching.contentType,
+          fileName: String(body.fileName),
+          dataset,
+          variant: "teaching",
+          bytes: teaching.bytes.length,
+          width: teaching.width,
+          height: teaching.height,
+          importedAt: new Date().toISOString(),
+        },
+      });
+      try {
+        await stores.images.set(thumbnailKey, thumbnail.bytes, {
+          metadata: {
+            contentType: thumbnail.contentType,
+            fileName: String(body.fileName),
+            dataset,
+            variant: "thumbnail",
+            sourceImageKey: imageKey,
+            sourceSha256: sourceHash,
+            bytes: thumbnail.bytes.length,
+            width: thumbnail.width,
+            height: thumbnail.height,
+            generatedAt: new Date().toISOString(),
+          },
+        });
+      } catch (error) {
+        await stores.images.delete(imageKey).catch(() => {});
+        throw error;
+      }
+      return reply({
+        imageKey,
+        thumbnailKey,
+        teachingBytes: teaching.bytes.length,
+        thumbnailBytes: thumbnail.bytes.length,
+        teachingWidth: teaching.width,
+        teachingHeight: teaching.height,
+        thumbnailWidth: thumbnail.width,
+        thumbnailHeight: thumbnail.height,
+      });
+    }
     if (body.action === "save") {
       if (!body.name || !body.password || !body.payload) {
         throw new ValidationError("Name, Passwort und Datensatz sind erforderlich.");
@@ -792,6 +1001,13 @@ export default async (req) => {
       if (body.create !== true && !existingEntry) throw new ValidationError("Datensatz noch nicht vorhanden.", 404);
       if (existingEntry && passwordHash(body.password, existingEntry.data.salt) !== existingEntry.data.passwordHash) {
         throw new ValidationError("Datensatz-Passwort ist falsch.", 401);
+      }
+      if (existingEntry && body.expectedVersionTag && body.expectedVersionTag !== existingEntry.etag) {
+        throw new ValidationError(
+          "Der Datensatz wurde auf dem Server zwischenzeitlich geändert. Lokale Änderungen wurden nicht überschrieben.",
+          409,
+          { conflict: true, currentVersionTag: existingEntry.etag }
+        );
       }
       const salt = existingEntry?.data.salt || crypto.randomBytes(16).toString("hex");
       const value = {
@@ -809,6 +1025,7 @@ export default async (req) => {
       if (!result.modified) throw new ValidationError("Datensatz wurde gleichzeitig geändert. Bitte neu laden.", 409);
       return reply({
         message: existingEntry ? "Datensatz wurde erfolgreich aktualisiert." : "Datensatz wurde erfolgreich neu angelegt.",
+        versionTag: result.etag,
       });
     }
     throw new ValidationError("Unbekannte Aktion.");

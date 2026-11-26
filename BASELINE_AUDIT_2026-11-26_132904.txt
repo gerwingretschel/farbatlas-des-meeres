@@ -1,0 +1,30 @@
+VERBINDLICHE BASIS DER ZUSAMMENFÜHRUNG
+
+Audit: Farbatlas_des_Meeres_Audit_2026-11-26_132904.txt
+Erstellt laut Audit: 2026-11-26 13:29:04 +0100
+
+Vor der Korrektur bestätigte Audit-Bestandteile:
+- v10-client.js: v5-Offlinesynchronisation, preparePair, finishIf-Brücke
+- index.html: ursprüngliche importFiles()/finishIf()-Importlogik
+- netlify/functions/farbatlas.mjs: upload-image-pair und expectedVersionTag-Konfliktschutz
+- farbatlas-sw.js: farbatlas-app-shell-v11, cache-first für Anwendungsskripte
+
+Gezielte Änderungen gegenüber dieser Basis:
+1. v10-client.js
+   - Importlauf-Kontext pro importFiles()-Aufruf
+   - serialisierte, laufbezogene Bildvorbereitung
+   - laufbezogene Fortschritts- und Ergebnisanzeige
+   - eindeutige teachingSrc-/thumbnailSrc-Rollen
+   - kein stiller Thumbnail-Fallback in der Großansicht
+   - v5-Offlinesynchronisation, Löschungen und Konfliktschutz bleiben erhalten
+2. farbatlas-sw.js
+   - neuer Cache farbatlas-app-shell-v12-import-sync-merged
+   - Anwendungsskripte network-first mit cache: no-store
+3. Tests
+   - gemeinsamer Import-/Offline-Regressionssatz einschließlich aufeinanderfolgender Importläufe
+
+Unverändert aus der Audit-Basis übernommen:
+- serverseitiger upload-image-pair-Ablauf
+- expectedVersionTag-Prüfung und HTTP-409-Konfliktschutz
+- Thumbnail-Prefetch aktuell +5/-2
+- dauerhafter pending-sync-Offlinestatus

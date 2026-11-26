@@ -234,8 +234,8 @@
 
   async function analyze() {
     if (state.busy) return;
-    const context = runtimeDataset();
-    const { name, images } = context;
+    let context = runtimeDataset();
+    let { name, images } = context;
     if (!name || !context.loaded) {
       setStatus('Bitte zuerst den gewünschten Datensatz öffnen.', 'error');
       return;
@@ -247,7 +247,21 @@
     setBusy(true);
     state.analysis = null;
     el('#imageCompressionStart').disabled = true;
-    setStatus(`Alle ${images.length} Bilder werden geprüft …`);
+    if (typeof window.FarbatlasRuntime?.ensureTeachingImages === 'function') {
+      setStatus('Die Unterrichtsbilder werden für die administrative Prüfung nacheinander geladen …');
+      try {
+        await window.FarbatlasRuntime.ensureTeachingImages((done, total, item) => {
+          setProgress(done, total, item?.name || 'Unterrichtsbilder vorbereiten');
+        });
+      } catch (error) {
+        setStatus(`Unterrichtsbilder konnten nicht vollständig geladen werden: ${error.message}`, 'error');
+        setBusy(false);
+        return;
+      }
+      context = runtimeDataset();
+      ({ name, images } = context);
+    }
+    setStatus(`Alle ${images.length} Unterrichtsbilder werden geprüft …`);
     const items = [];
     const failed = [];
     try {
@@ -321,6 +335,7 @@
           });
           item.source.src = await blobToDataUrl(result.blob);
           item.source.file = undefined;
+           item.source.thumbnailStale = Boolean(item.source.thumbnailKey);
           completed += 1;
           compressedBytes += result.blob.size;
         } catch (error) {
